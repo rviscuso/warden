@@ -24,6 +24,13 @@ warden proxy    [flags]             the egress proxy itself; runs inside the pro
 
 Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
 
+- `--help` (or `-h`) on any command prints usage to stdout and exits 0. A usage error prints the
+  error and usage to stderr and exits 2.
+- `warden proxy --help` works without `WARDEN_ROLE`; only running the proxy requires it.
+- A command whose milestone hasn't landed yet prints `not implemented` to stderr and exits 1.
+- `warden version` reads Go's embedded build info (`runtime/debug.ReadBuildInfo`): the module
+  version, `vcs.revision` and `vcs.modified`. No `-ldflags`.
+
 ## Directories
 
 Resolved with the XDG base-directory rules (`$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`,
@@ -34,6 +41,13 @@ Resolved with the XDG base-directory rules (`$XDG_CONFIG_HOME`, `$XDG_STATE_HOME
 | Config | `~/.config/warden/config.json` | No, never mountable |
 | State | `~/.local/state/warden/` (`state.json`, `compose/`, `docker-config/`) | No, never mountable |
 | Agent homes | `~/.local/share/warden/agents/<name>/` | Yes: mounted as the agent's `$HOME` |
+
+- A relative `XDG_*` value is ignored (per the XDG spec) and the default is used.
+- `internal/paths` only works out locations; it creates nothing.
+- Commands that need a directory create it (`init`; the Docker runner for `docker-config/`).
+  Other commands fail with "run warden init" if it is missing.
+- An existing directory with permissions looser than 0700, or not owned by the invoking user, is an
+  error with the exact fix (e.g. `chmod 700 <dir>`). Warden never changes permissions silently.
 
 ## Package layout
 
@@ -89,13 +103,23 @@ or the Docker socket. That is the point.
 Validation (each rule has a failing test):
 - unknown fields anywhere → error;
 - `version` must be 1;
-- `socket` must be an absolute path;
+- `docker.socket` is optional and defaults to `/var/run/docker.sock`; if set, it must be an absolute path;
 - images must be `name@sha256:<64 hex>` or `sha256:<64 hex>`; tags are rejected;
 - `egress.allow`: non-empty; each entry a lowercase hostname, optionally with a leading dot for
-  subdomains; no schemes, paths, ports, wildcards or IP addresses;
+  subdomains; no schemes, paths, ports, wildcards or IP addresses. Precisely:
+  - labels are LDH only: `a-z`, `0-9` and `-`, with no hyphen at the start or end of a label;
+  - at least two labels (`localhost` is rejected); a leading-dot entry needs at least two labels
+    after the dot (`.com` is rejected);
+  - no trailing dot;
+  - punycode (`xn--…`) labels are allowed;
+  - at most 253 characters overall and 63 per label;
+  - duplicate entries are an error;
 - `remote_control_name` must match `^[a-zA-Z0-9._-]{1,64}$`;
-- resources must be positive, with sane upper bounds;
-- `workspace` must pass mount validation.
+- resources: `memory_mb` 256 to 65536; `cpus` 0.25 to 64 (fractions allowed); `pids` 64 to 32768;
+- `workspace` must be an absolute path.
+
+`internal/config` validates format only. The workspace is checked by `internal/mounts`; the command
+layer runs both (and `up` re-runs mount validation anyway).
 
 ## Mount validation (`internal/mounts`, security-critical)
 
@@ -106,8 +130,14 @@ mounted is writable to it. Only what is mounted is reachable, so this validation
 - doesn't exist, isn't a directory, or isn't owned by the invoking user;
 - is `/`, the user's home directory, or an ancestor of the home directory;
 - is, is inside, or contains Warden's config, state or agent-home directories;
-- contains any of: `~/.ssh`, `~/.config`, `~/.local`, `~/.aws`, `~/.azure`, `~/.docker`, `~/.gnupg`, `~/.kube`, `~/.netrc`, `~/.bashrc`, `~/.profile`, `~/.zshrc`;
-- is, is inside, or contains a system directory (`/etc`, `/usr`, `/bin`, `/sbin`, `/lib`, `/var`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`, `/root`) or the Docker socket.
+- is, is inside, or contains any of: `~/.ssh`, `~/.config`, `~/.local`, `~/.aws`, `~/.azure`, `~/.docker`, `~/.gnupg`, `~/.kube`, `~/.netrc`, `~/.bashrc`, `~/.profile`, `~/.zshrc`;
+- is, is inside, or contains a system directory (`/etc`, `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/var`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`, `/root`, `/tmp`, `/snap`) or the Docker socket.
+
+Forbidden paths are compared in two forms. Each forbidden path (Warden's directories, the dotfile
+list, the system directories, the Docker socket) is compared both as written and, when it exists,
+as resolved by `filepath.EvalSymlinks` (so `~/.config -> /data/dotfiles/config` or
+`/var/run -> /run` can't be bypassed). A forbidden path that doesn't exist is compared as written;
+that is not a failure. `/opt`, `/srv`, `/mnt` and `/media` are allowed; the ownership rule covers them.
 
 The same checks run on every `up`, not only at config load, because the filesystem can change.
 Tests cover each rule, symlinks pointing into a forbidden path, `..` segments, and trailing slashes.
@@ -118,8 +148,11 @@ Tests cover each rule, symlinks pointing into a forbidden path, `..` segments, a
 - Runs it with a clean environment: `PATH=/usr/sbin:/usr/bin:/sbin:/bin`, `HOME` (the user's),
   `DOCKER_HOST=unix://<socket from config>`, `DOCKER_CONFIG=<state>/docker-config` (created empty, 0700).
   Nothing else is inherited.
+- The runner creates `<state>/docker-config` with mode 0700 if it is missing. If it exists with
+  looser permissions or another owner, the runner fails with the exact fix; it never changes
+  permissions silently.
 - argv only. Never `sh -c`.
-- Every call has a timeout.
+- Every call has a timeout: 30 seconds by default; callers override it (`docker compose up`/`down`: 5 minutes).
 
 ## Hardening (`internal/hardening`)
 
