@@ -26,3 +26,11 @@ func runVersion(e *env) int {
 	fmt.Fprintf(e.stdout, "warden %s\n  revision: %s\n  modified: %s\n  go:       %s\n", version, revision, modified, goVersion)
 	return ExitOK
 }
+
+// wardenVersion is the main module version from build info, or "unknown".
+func (e *env) wardenVersion() string {
+	if bi, ok := e.buildInfo(); ok && bi != nil && bi.Main.Version != "" {
+		return bi.Main.Version
+	}
+	return "unknown"
+}

@@ -13,8 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
+
+	"github.com/rviscuso/warden/internal/docker"
 )
 
 // Exit codes.
@@ -33,6 +37,15 @@ type env struct {
 	getenv    func(string) string
 	buildInfo func() (*debug.BuildInfo, bool)
 	geteuid   func() int
+
+	getuid      func() int
+	home        func() (string, error)
+	now         func() time.Time
+	root        string // filesystem root for host files
+	goos        string
+	goarch      string
+	dockerPaths []string
+	newRunner   func(docker.Options) (docker.Runner, error)
 }
 
 // Run executes the command line args (args[0] is the program name) and
@@ -45,6 +58,15 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		getenv:    os.Getenv,
 		buildInfo: debug.ReadBuildInfo,
 		geteuid:   os.Geteuid,
+
+		getuid:      os.Getuid,
+		home:        os.UserHomeDir,
+		now:         time.Now,
+		root:        "/",
+		goos:        runtime.GOOS,
+		goarch:      runtime.GOARCH,
+		dockerPaths: docker.BinaryPaths,
+		newRunner:   func(o docker.Options) (docker.Runner, error) { return docker.New(o) },
 	}, args)
 }
 
@@ -77,16 +99,16 @@ func commands() []*command {
 		{
 			name:    "init",
 			args:    "[--json]",
-			summary: "Run host, daemon and canary checks; on success record state",
-			detail:  "Run every check, prove isolation with a canary container, and on success record the daemon pin in Warden's state.",
-			define:  jsonNotImplemented("init"),
+			summary: "Run the checks and, on success, pin the daemon",
+			detail:  "Create Warden's directories, run every check, and on success pin the daemon in Warden's state. Re-pinning to a different daemon asks for approval. (The canary arrives in milestone 4.)",
+			define:  jsonCommand(runInit),
 		},
 		{
 			name:    "check",
 			args:    "[--json]",
-			summary: "Re-run the checks and canary without changing state",
-			detail:  "Run the same checks and canary as init, read-only, to re-prove that the sandbox holds.",
-			define:  jsonNotImplemented("check"),
+			summary: "Re-run the checks, read-only",
+			detail:  "Run the same checks as init plus the daemon pin, read-only, to re-prove that the sandbox holds. Creates nothing.",
+			define:  jsonCommand(runCheck),
 		},
 		{
 			name:    "up",
@@ -280,5 +302,18 @@ func printCommandUsage(w io.Writer, c *command, fs *flag.FlagSet) {
 		fs.SetOutput(w)
 		fs.PrintDefaults()
 		fs.SetOutput(io.Discard)
+	}
+}
+
+// jsonCommand defines a command with a --json flag and no arguments.
+func jsonCommand(fn func(e *env, jsonOut bool) int) func(*flag.FlagSet) func(*env, []string) int {
+	return func(fs *flag.FlagSet) func(*env, []string) int {
+		jsonOut := fs.Bool("json", false, "print results as JSON")
+		return func(e *env, pos []string) int {
+			if len(pos) > 0 {
+				return usageError(e, strings.TrimPrefix(fs.Name(), "warden "), "unexpected arguments: "+strings.Join(pos, " "))
+			}
+			return fn(e, *jsonOut)
+		}
 	}
 }

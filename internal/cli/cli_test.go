@@ -110,8 +110,6 @@ func TestUnknownFlagIsUsageError(t *testing.T) {
 
 func TestNotImplemented(t *testing.T) {
 	cases := [][]string{
-		{"init"}, {"init", "--json"},
-		{"check"}, {"check", "--json"},
 		{"up"}, {"down"},
 		{"status"}, {"status", "--json"},
 		{"logs", "proxy"}, {"logs", "controller", "-n", "5"}, {"logs", "-n", "5", "proxy"},
