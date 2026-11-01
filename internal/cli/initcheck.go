@@ -40,6 +40,7 @@ func (e *env) checksEnv(mode checks.Mode, dirs paths.Dirs, home string) checks.E
 		GOARCH:      e.goarch,
 		DockerPaths: e.dockerPaths,
 		NewRunner:   e.newRunner,
+		SystemDirs:  e.systemDirs,
 		Ctx:         context.Background(),
 	}
 }

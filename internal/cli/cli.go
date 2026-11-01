@@ -46,6 +46,7 @@ type env struct {
 	goarch      string
 	dockerPaths []string
 	newRunner   func(docker.Options) (docker.Runner, error)
+	systemDirs  []string // nil in production: mounts.DefaultSystemDirs
 }
 
 // Run executes the command line args (args[0] is the program name) and

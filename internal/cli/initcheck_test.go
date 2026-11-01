@@ -115,6 +115,8 @@ func (h *host) run(args ...string) result {
 		goarch:      "amd64",
 		dockerPaths: []string{filepath.Join(h.root, "bin/docker")},
 		newRunner:   func(docker.Options) (docker.Runner, error) { return h.fake, nil },
+		// Fixture system dirs: t.TempDir() may be under /tmp (see checks tests).
+		systemDirs: []string{filepath.Join(h.root, "hostfs/etc")},
 	}
 	code := run(e, append([]string{"warden"}, args...))
 	return result{code, out.String(), errb.String()}

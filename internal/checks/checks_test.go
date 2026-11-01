@@ -76,6 +76,9 @@ func newHarness(t *testing.T) *harness {
 		GOOS:        "linux",
 		GOARCH:      "amd64",
 		DockerPaths: []string{filepath.Join(root, "bin/docker")},
+		// Fixture system dirs: the temp dir may itself be under /tmp, a
+		// real system directory (it is in a stock golang container).
+		SystemDirs: []string{filepath.Join(root, "hostfs/etc"), filepath.Join(root, "hostfs/usr")},
 		NewRunner: func(o docker.Options) (docker.Runner, error) {
 			h.runnerOpts = append(h.runnerOpts, o)
 			return h.fake, nil
@@ -602,5 +605,23 @@ func TestSecurityOption(t *testing.T) {
 func TestTestedVersions(t *testing.T) {
 	if !slices.Equal(TestedEngineVersions, []string{"29.1.3"}) || MinEngineVersion != [3]int{25, 0, 0} {
 		t.Fatalf("tested %v min %v", TestedEngineVersions, MinEngineVersion)
+	}
+}
+
+func TestInjectedSystemDirsAreUsed(t *testing.T) {
+	h := newHarness(t)
+	sysWS := filepath.Join(h.root, "hostfs/etc/repo")
+	os.MkdirAll(sysWS, 0o700)
+	h.writeConfig(sysWS, h.sock)
+	expect(t, h.run(), "workspace.valid", Fail, "[rule system-dir]")
+}
+
+func TestEmptySystemDirsMeanTheDefault(t *testing.T) {
+	// Production passes no list: the real /tmp and /etc are refused.
+	for _, ws := range []string{"/tmp", "/etc"} {
+		h := newHarness(t)
+		h.env.SystemDirs = nil
+		h.writeConfig(ws, h.sock)
+		expect(t, h.run(), "workspace.valid", Fail, "is the system directory "+ws)
 	}
 }

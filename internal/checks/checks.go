@@ -76,6 +76,10 @@ type Env struct {
 	GOOS        string
 	GOARCH      string
 	DockerPaths []string
+	// SystemDirs overrides mounts.DefaultSystemDirs for workspace validation.
+	// Tests point it at fixtures so they pass wherever the temp dir lives;
+	// empty means the default list (it can never switch the rule off).
+	SystemDirs []string
 	// NewRunner builds the docker runner (production: docker.New).
 	NewRunner func(docker.Options) (docker.Runner, error)
 	Ctx       context.Context
@@ -188,6 +192,7 @@ func (r *run) policy() mounts.Policy {
 		Home:       r.env.Home,
 		WardenDirs: r.wardenDirs(),
 		Socket:     r.rep.Config.Docker.Socket,
+		SystemDirs: r.env.SystemDirs,
 	}
 }
 
