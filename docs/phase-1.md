@@ -237,6 +237,8 @@ Precisely:
 - **Limits are constants, not flags:** 10 s to read the request headers, 8 KiB of headers (`net/http`
   adds its own small allowance on top), 5 s to resolve, a 10 s total dial budget with at most 5 s per
   address, and at most 256 concurrent tunnels. At the cap a request is refused at once, never queued.
+  Writing a refusal to a slow client may take 25 s (header + resolve + dial budget, so the slowest
+  502 or 504 still gets out); that deadline is cleared after `Hijack`.
 - **Built on `net/http.Server`** with `Hijack` for the tunnel. Requests that `net/http` itself rejects
   before the handler runs (malformed request line, oversized or slow headers) get its own 4xx and no
   log line.
@@ -284,6 +286,11 @@ Precisely:
   the tunnel is not opened (502). A request that is allowed but fails to resolve or dial is one
   `deny` line with `decision: error`. The `start` line carries `listen` (the bound address), `allow`
   and `ports`. Nothing from inside a tunnel is ever logged.
+- **Reasons.** `open`: `allowlist: <entry>`, the entry that matched. `close`: `closed`, `shutdown`,
+  `client to server: <error>` or `server to client: <error>`. `deny`: `method not allowed`,
+  `invalid target: …`, `port not allowed`, `ip literal`, `invalid host`, `host not allowed`,
+  `too many tunnels`, `shutting down`, `non-public address: …`, `resolve failed: …`,
+  `dial failed …` or `dial timed out …`.
 - Domain fronting is not checked (no SNI inspection); see `DESIGN.md` §2.
 
 Proxy container: `runtime_image`, the `warden` binary bind-mounted read-only, command
