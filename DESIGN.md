@@ -69,6 +69,7 @@ agent always getting it right: the boundary holds either way.
 **Accepted, out of scope:**
 - The agent can always send data to its model provider; that channel is the product.
 - Allowlisting is by hostname, not URL path. An allowed host is reachable in full.
+- If an allowed host shares a CDN with other sites, a client can reach those sites through it (domain fronting), because the proxy sees only the CONNECT hostname, not what is sent inside TLS.
 - A zero-day in the kernel or Docker can defeat any container boundary. Warden reduces the odds; it does not remove them.
 - Containers on a shared internal network can reach each other, so each holds only its own secrets.
 
@@ -177,7 +178,7 @@ No firewall, no root entrypoint: egress control lives in the network, not in the
 - **Egress proxy**: the only container on both the sandbox network and an egress network. It is `warden proxy`, running from the stock image as the user's UID with no capabilities.
   - HTTPS only (`CONNECT`), port 443 by default.
   - Hostnames on the allowlist only; a leading dot allows subdomains. IP literals are refused.
-  - Resolves names itself and refuses private, loopback and link-local addresses, so an allowed name can't be pointed at the host or a metadata service.
+  - Resolves names itself and refuses private, loopback, link-local and other non-public addresses, so an allowed name can't be pointed at the host or a metadata service.
   - Logs every connection when it opens and when it closes, with bytes and duration.
 - **Allowlist** lives in Warden's config. Changing it is a change to the sandbox, so it goes through approval.
 - **Ports**: none by default. Phase 3 adds declared ports, bound to `127.0.0.1` unless stated otherwise.
