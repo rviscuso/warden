@@ -1,0 +1,12 @@
+[
+  {"Id":"1111111111111111111111111111111111111111111111111111111111111111","Name":"/unrelated","Mounts":[
+    {"Type":"bind","Source":"@ROOT@/srv/data","Destination":"/data","RW":true},
+    {"Type":"tmpfs","Source":"","Destination":"/run","RW":true}]},
+  {"Id":"2222222222222222222222222222222222222222222222222222222222222222","Name":"/mounts-workspace","Mounts":[
+    {"Type":"bind","Source":"@ROOT@/ws","Destination":"/src","RW":false}]},
+  {"Id":"3333333333333333333333333333333333333333333333333333333333333333","Name":"/mounts-parent-of-state","Mounts":[
+    {"Type":"bind","Source":"@ROOT@","Destination":"/host","RW":true}]},
+  {"Id":"4444444444444444444444444444444444444444444444444444444444444444","Name":"/bind-volume","Mounts":[
+    {"Type":"volume","Name":"wsvol","Source":"/var/lib/docker/volumes/wsvol/_data","Destination":"/w","Driver":"local","RW":true},
+    {"Type":"volume","Name":"plainvol","Source":"/var/lib/docker/volumes/plainvol/_data","Destination":"/p","Driver":"local","RW":true}]}
+]
