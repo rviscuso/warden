@@ -133,11 +133,19 @@ mounted is writable to it. Only what is mounted is reachable, so this validation
 - is, is inside, or contains any of: `~/.ssh`, `~/.config`, `~/.local`, `~/.aws`, `~/.azure`, `~/.docker`, `~/.gnupg`, `~/.kube`, `~/.netrc`, `~/.bashrc`, `~/.profile`, `~/.zshrc`;
 - is, is inside, or contains a system directory (`/etc`, `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/var`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`, `/root`, `/tmp`, `/snap`) or the Docker socket.
 
-Forbidden paths are compared in two forms. Each forbidden path (Warden's directories, the dotfile
-list, the system directories, the Docker socket) is compared both as written and, when it exists,
-as resolved by `filepath.EvalSymlinks` (so `~/.config -> /data/dotfiles/config` or
-`/var/run -> /run` can't be bypassed). A forbidden path that doesn't exist is compared as written;
-that is not a failure. `/opt`, `/srv`, `/mnt` and `/media` are allowed; the ownership rule covers them.
+Each forbidden path (Warden's directories, the home directory, the dotfile list, the system
+directories, the Docker socket) is compared in every one of these forms:
+- as written (cleaned);
+- when it exists, as resolved by `filepath.EvalSymlinks` (so `~/.config -> /data/dotfiles/config`
+  or `/var/run -> /run` can't be bypassed);
+- partially resolved: walked one component at a time, following every symlink (including a
+  dangling one) and keeping missing components as written. This is where the path would land if it
+  were created now: a dangling `~/.ssh -> /data/ssh` yields `/data/ssh`, so a workspace `/data` is
+  refused. For an existing path it equals the `EvalSymlinks` form.
+
+A forbidden path that doesn't exist is not a failure. Any other resolution error (a symlink loop,
+permission denied) refuses the workspace. `/opt`, `/srv`, `/mnt` and `/media` are allowed; the
+ownership rule covers them.
 
 The same checks run on every `up`, not only at config load, because the filesystem can change.
 Tests cover each rule, symlinks pointing into a forbidden path, `..` segments, and trailing slashes.

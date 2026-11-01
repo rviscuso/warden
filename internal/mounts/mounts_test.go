@@ -398,3 +398,89 @@ func TestErrorMessage(t *testing.T) {
 		t.Fatalf("got %v, want %q", err, want)
 	}
 }
+
+func TestDanglingDotfileSymlink(t *testing.T) {
+	// ~/.ssh -> R/data/ssh, and R/data/ssh doesn't exist yet. A workspace
+	// R/data would let the agent create R/data/ssh/authorized_keys, which
+	// the user's ssh then reads through the link.
+	f := newFixture(t)
+	f.mkdir("data/other")
+	f.symlink(f.path("data/ssh"), "home/u/.ssh")
+	e := f.refused(f.path("data"), RuleDotfile)
+	if e.Forbidden != f.path("data/ssh") {
+		t.Fatalf("forbidden %q", e.Forbidden)
+	}
+	f.ok(f.path("data/other"), f.path("data/other"))
+}
+
+func TestDanglingRelativeAndChainedSymlinks(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("data2")
+	f.mkdir("data3")
+	// Relative target: ~/.aws -> ../../data2/aws (missing).
+	f.symlink("../../data2/aws", "home/u/.aws")
+	f.refused(f.path("data2"), RuleDotfile)
+	// Chain: ~/.kube -> R/hop -> R/data3/kube (missing).
+	f.symlink(f.path("data3/kube"), "hop")
+	f.symlink(f.path("hop"), "home/u/.kube")
+	f.refused(f.path("data3"), RuleDotfile)
+}
+
+func TestMissingWardenDirBehindSymlinkedParent(t *testing.T) {
+	// XDG_STATE_HOME=R/srv/link with R/srv/link -> R/x/state, and warden/
+	// not created yet: init would later create Warden's state inside a
+	// workspace R/x/state.
+	f := newFixture(t)
+	f.mkdir("x/state")
+	f.symlink(f.path("x/state"), "srv/link")
+	f.policy.WardenDirs = append(f.policy.WardenDirs, f.path("srv/link/warden"))
+	f.refused(f.path("x/state"), RuleWardenDir)
+	f.refused(f.path("x"), RuleWardenDir)
+}
+
+func TestResolvePartial(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("a/b")
+	f.symlink(f.path("a/b"), "lnk")
+	f.symlink("..", "a/b/up") // relative: a/b/up -> a
+	f.symlink(f.path("gone/deeper"), "dangling")
+	cases := map[string]string{
+		f.path("a/b"):                     f.path("a/b"),
+		f.path("lnk"):                     f.path("a/b"),
+		f.path("lnk/missing/x"):           f.path("a/b/missing/x"),
+		f.path("lnk/up/b"):                f.path("a/b"),
+		f.path("dangling"):                f.path("gone/deeper"),
+		f.path("dangling/x"):              f.path("gone/deeper/x"),
+		f.path("missing") + "/../lnk":     f.path("a/b"), // ".." after a missing component
+		f.path("lnk") + "/..":             f.path("a"),   // physical, not lexical
+		f.path("sys/var/run/docker.sock"): f.path("sys/run/docker.sock"),
+	}
+	for in, want := range cases {
+		got, err := resolvePartial(in)
+		if err != nil || got != want {
+			t.Errorf("resolvePartial(%s) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	// For existing paths it agrees with EvalSymlinks.
+	for _, in := range []string{f.path("lnk"), f.path("lnk/up/b"), f.path("sys/bin"), f.path("sys/var/run")} {
+		want, err := filepath.EvalSymlinks(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := resolvePartial(in); err != nil || got != want {
+			t.Errorf("resolvePartial(%s) = %q, %v; EvalSymlinks says %q", in, got, err, want)
+		}
+	}
+}
+
+func TestResolvePartialLoopFailsClosed(t *testing.T) {
+	f := newFixture(t)
+	f.symlink("b", "loop/a")
+	f.symlink("a", "loop/b")
+	if _, err := resolvePartial(f.path("loop/a/x")); err == nil || !strings.Contains(err.Error(), "too many levels") {
+		t.Fatalf("got %v", err)
+	}
+	// A dangling-loop forbidden path refuses the workspace.
+	f.symlink(f.path("loop/a/kube"), "home/u/.kube")
+	f.refused(f.path("home/u/code/repo"), RuleInvalid)
+}

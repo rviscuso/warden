@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -188,23 +189,103 @@ func (p Policy) check() error {
 	return nil
 }
 
-// forms returns the forbidden path f as written (cleaned) and, when it
-// exists, as resolved by EvalSymlinks. A path that doesn't exist is compared
-// as written only; any other resolution error fails closed.
+// forms returns every form forbidden path f is compared in:
+//   - as written (cleaned);
+//   - as resolved by EvalSymlinks, when it exists;
+//   - partially resolved (see resolvePartial), which also covers a path
+//     that doesn't exist yet behind a symlink: ~/.ssh -> /data/ssh with
+//     /data/ssh missing yields /data/ssh.
+//
+// Missing components are not an error; any other resolution error fails
+// closed.
 func forms(f string) ([]string, error) {
 	clean := filepath.Clean(f)
+	out := []string{clean}
+	add := func(p string) {
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
 	r, err := filepath.EvalSymlinks(clean)
 	switch {
 	case err == nil:
-		if r == clean {
-			return []string{clean}, nil
-		}
-		return []string{clean, r}, nil
+		add(r)
 	case isNotExist(err):
-		return []string{clean}, nil
 	default:
 		return nil, fmt.Errorf("cannot resolve forbidden path %s: %v", clean, err)
 	}
+	p, err := resolvePartial(clean)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve forbidden path %s: %v", clean, err)
+	}
+	add(p)
+	return out, nil
+}
+
+// maxSymlinkHops bounds symlink expansion in resolvePartial (Linux uses 40
+// for a single lookup; a little more headroom costs nothing).
+const maxSymlinkHops = 255
+
+// resolvePartial resolves the clean absolute path p one component at a
+// time, the way the kernel would: every symlink is followed, including a
+// dangling one, and ".." steps back from the resolved parent. Components
+// that don't exist are kept as written, so the result is where p would land
+// if it were created now. For an existing path the result equals
+// filepath.EvalSymlinks(p).
+//
+// EvalSymlinks on the deepest existing ancestor is not enough: for a dangling
+// ~/.ssh -> /data/ssh, that ancestor is ~ itself and the link is never read.
+func resolvePartial(p string) (string, error) {
+	cur := "/"
+	rest := splitPath(p)
+	hops := 0
+	for len(rest) > 0 {
+		c := rest[0]
+		rest = rest[1:]
+		switch c {
+		case ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, c)
+		fi, err := os.Lstat(next)
+		switch {
+		case isNotExist(err):
+			cur = next // missing: keep as written, keep walking (".." may follow)
+			continue
+		case err != nil:
+			return "", err
+		case fi.Mode()&fs.ModeSymlink == 0:
+			cur = next
+			continue
+		}
+		hops++
+		if hops > maxSymlinkHops {
+			return "", fmt.Errorf("%s: too many levels of symbolic links", p)
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			cur = "/"
+		}
+		rest = append(splitPath(target), rest...)
+	}
+	return cur, nil
+}
+
+// splitPath splits p into its non-empty components.
+func splitPath(p string) []string {
+	var out []string
+	for _, c := range strings.Split(p, "/") {
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // isNotExist reports whether err means a path doesn't exist: ENOENT, or
