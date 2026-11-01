@@ -439,3 +439,48 @@ func TestCappedBuffer(t *testing.T) {
 		t.Fatalf("after overflow: %v, %d calls, %q", b.overflowed(), calls, b.Bytes())
 	}
 }
+
+func TestDockerConfigMustBeEmpty(t *testing.T) {
+	for _, entry := range []string{"config.json", "cli-plugins", ".hidden"} {
+		s := newSetup(t)
+		dc := filepath.Join(s.state, "docker-config")
+		if err := os.Mkdir(dc, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dc, entry)
+		if entry == "cli-plugins" {
+			os.Mkdir(p, 0o700)
+		} else {
+			os.WriteFile(p, []byte(`{"credsStore":"evil"}`), 0o600)
+		}
+		_, err := New(s.opts)
+		var de *paths.DirError
+		if !errors.As(err, &de) {
+			t.Fatalf("%s: got %v", entry, err)
+		}
+		if !strings.Contains(de.Problem, "must be empty but contains "+entry) {
+			t.Errorf("%s: problem %q", entry, de.Problem)
+		}
+		if de.Fix != "rm -r "+paths.ShellQuote(dc)+" (Warden recreates it empty)" {
+			t.Errorf("%s: fix %q", entry, de.Fix)
+		}
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("%s: New removed it: %v", entry, err)
+		}
+	}
+}
+
+func TestDockerConfigEmptyAfterFix(t *testing.T) {
+	// Following the fix (removing the directory) lets New recreate it.
+	s := newSetup(t)
+	dc := filepath.Join(s.state, "docker-config")
+	os.Mkdir(dc, 0o700)
+	os.WriteFile(filepath.Join(dc, "config.json"), nil, 0o600)
+	if _, err := New(s.opts); err == nil {
+		t.Fatal("expected an error")
+	}
+	if err := os.RemoveAll(dc); err != nil {
+		t.Fatal(err)
+	}
+	s.runner(t)
+}

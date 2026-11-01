@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,7 +87,8 @@ var _ Runner = (*Exec)(nil)
 
 // New validates opts and prepares <state>/docker-config: created with mode
 // 0700 if missing; if it exists, it must already be a 0700 directory owned
-// by the user. Nothing is ever chmod-ed or chown-ed.
+// by the user, and it must be empty (see checkEmpty). Nothing is ever
+// chmod-ed, chown-ed or cleaned up.
 func New(opts Options) (*Exec, error) {
 	for name, p := range map[string]string{
 		"docker binary": opts.Binary, "socket": opts.Socket,
@@ -105,6 +107,9 @@ func New(opts Options) (*Exec, error) {
 	}
 	dockerConfig := filepath.Join(opts.StateDir, "docker-config")
 	if err := ensurePrivateDir(dockerConfig, opts.UID); err != nil {
+		return nil, fmt.Errorf("docker: %w", err)
+	}
+	if err := checkEmpty(dockerConfig); err != nil {
 		return nil, fmt.Errorf("docker: %w", err)
 	}
 	return &Exec{
@@ -129,6 +134,28 @@ func ensurePrivateDir(dir string, uid int) error {
 	}
 	// Re-check what is actually there now (umask, or a concurrent creator).
 	return paths.CheckDir(dir, uid)
+}
+
+// checkEmpty requires dir to have no entries. Anything in DOCKER_CONFIG
+// changes what the docker CLI does: config.json can name credential helpers
+// (programs docker runs) and cli-plugins/ can shadow docker compose.
+func checkEmpty(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return &paths.DirError{
+		Path:    dir,
+		Problem: fmt.Sprintf("must be empty but contains %s (Warden's docker CLI config must not name credential helpers or plugins)", strings.Join(names, ", ")),
+		Fix:     "rm -r " + paths.ShellQuote(dir) + " (Warden recreates it empty)",
+	}
 }
 
 // Env returns the exact environment docker runs with.

@@ -158,7 +158,9 @@ Tests cover each rule, symlinks pointing into a forbidden path, `..` segments, a
 - Runs it with a clean environment: `PATH=/usr/sbin:/usr/bin:/sbin:/bin`, `HOME` (the user's),
   `DOCKER_HOST=unix://<socket from config>`, `DOCKER_CONFIG=<state>/docker-config` (created empty, 0700).
   Nothing else is inherited.
-- The runner creates `<state>/docker-config` with mode 0700 if it is missing. If it exists with
+- The runner creates `<state>/docker-config` with mode 0700 if it is missing. It must be empty when
+  the runner is created (a `config.json` can name credential helpers, a `cli-plugins/` can shadow
+  `docker compose`); otherwise the runner fails with the exact fix. If it exists with
   looser permissions or another owner, the runner fails with the exact fix; it never changes
   permissions silently.
 - argv only. Never `sh -c`.
