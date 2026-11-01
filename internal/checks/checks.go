@@ -705,7 +705,7 @@ func (r *run) sharedMounts() {
 		r.fail(id, title, strings.Join(findings, "; "), fix)
 		return
 	}
-	r.pass(id, title, fmt.Sprintf("%d containers inspected", len(containers)))
+	r.pass(id, title, inspected(len(containers)))
 }
 
 func short(id string) string {
@@ -713,4 +713,11 @@ func short(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+func inspected(n int) string {
+	if n == 1 {
+		return "1 container inspected"
+	}
+	return fmt.Sprintf("%d containers inspected", n)
 }
