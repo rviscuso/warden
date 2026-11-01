@@ -617,11 +617,19 @@ func TestInjectedSystemDirsAreUsed(t *testing.T) {
 }
 
 func TestEmptySystemDirsMeanTheDefault(t *testing.T) {
-	// Production passes no list: the real /tmp and /etc are refused.
-	for _, ws := range []string{"/tmp", "/etc"} {
+	// Production passes no list. /etc and /usr can never contain the test's
+	// temp dir, so the system-dir rule is what refuses them.
+	for _, ws := range []string{"/etc", "/usr"} {
 		h := newHarness(t)
 		h.env.SystemDirs = nil
 		h.writeConfig(ws, h.sock)
 		expect(t, h.run(), "workspace.valid", Fail, "is the system directory "+ws)
 	}
+	// /tmp is refused too. When the temp dir is under /tmp (stock golang
+	// container) an earlier rule (home, Warden dir) fires first; either way
+	// it is never accepted.
+	h := newHarness(t)
+	h.env.SystemDirs = nil
+	h.writeConfig("/tmp", h.sock)
+	expect(t, h.run(), "workspace.valid", Fail, "workspace /tmp refused")
 }
