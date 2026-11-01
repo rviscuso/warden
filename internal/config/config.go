@@ -1,6 +1,7 @@
 // Package config loads and validates Warden's config.json.
 //
-// Decoding is strict: unknown fields and trailing data are errors. This
+// Decoding is strict: unknown fields, keys that differ from the schema only
+// by case, duplicate keys and trailing data are all errors. This
 // package validates format only; the workspace path is checked against the
 // filesystem by internal/mounts, and the command layer runs both.
 package config
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -78,6 +80,9 @@ func Load(path string) (*Config, error) {
 
 // Parse decodes data strictly, applies defaults and validates the result.
 func Parse(data []byte) (*Config, error) {
+	if err := checkKeys(data, reflect.TypeFor[Config]()); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var c Config

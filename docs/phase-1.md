@@ -102,6 +102,8 @@ or the Docker socket. That is the point.
 
 Validation (each rule has a failing test):
 - unknown fields anywhere → error;
+- a key that differs from a schema field only by case (`"Socket"`, or a Unicode case-fold like `"ſocket"`) → error; `encoding/json` would otherwise accept it;
+- a duplicate key in any object, at any depth → error; `encoding/json` would otherwise let the last one win;
 - `version` must be 1;
 - `docker.socket` is optional and defaults to `/var/run/docker.sock`; if set, it must be an absolute path;
 - images must be `name@sha256:<64 hex>` or `sha256:<64 hex>`; tags are rejected;
