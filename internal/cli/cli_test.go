@@ -160,9 +160,10 @@ func TestProxyRequiresRole(t *testing.T) {
 			t.Errorf("role %q: got %+v", role, r)
 		}
 	}
-	r := runWith(t, map[string]string{"WARDEN_ROLE": "proxy"}, nil, "proxy")
-	if r.code != ExitFail || r.stderr != "warden proxy: not implemented\n" {
-		t.Errorf("role proxy: got %+v", r)
+	// The role is checked before the flags are validated.
+	r := runWith(t, nil, nil, "proxy", "--ports", "0")
+	if r.code != ExitFail || !strings.Contains(r.stderr, "WARDEN_ROLE=proxy is not set") {
+		t.Errorf("no role, bad ports: got %+v", r)
 	}
 }
 

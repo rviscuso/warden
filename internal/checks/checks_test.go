@@ -519,7 +519,15 @@ func TestSharedMountsUnrelatedPasses(t *testing.T) {
 	h.fake.On(argsPS, dockertest.Response{Stdout: fixtureIDs[0] + "\n"})
 	insp := `[{"Id":"` + fixtureIDs[0] + `","Name":"/unrelated","Mounts":[{"Type":"bind","Source":"` + h.root + `/srv/data","Destination":"/data"}]}]`
 	h.fake.On(inspectArgs(fixtureIDs[0]), dockertest.Response{Stdout: insp})
-	expect(t, h.run(), "host.shared-mounts", Pass, "1 containers inspected")
+	expect(t, h.run(), "host.shared-mounts", Pass, "1 container inspected")
+}
+
+func TestSharedMountsPluralDetail(t *testing.T) {
+	h := newHarness(t)
+	h.fake.On(argsPS, dockertest.Response{Stdout: fixtureIDs[0] + "\n" + fixtureIDs[1] + "\n"})
+	insp := `[{"Id":"` + fixtureIDs[0] + `","Name":"/c0","Mounts":[]},{"Id":"` + fixtureIDs[1] + `","Name":"/c1","Mounts":[]}]`
+	h.fake.On(inspectArgs(fixtureIDs[0], fixtureIDs[1]), dockertest.Response{Stdout: insp})
+	expect(t, h.run(), "host.shared-mounts", Pass, "2 containers inspected")
 }
 
 func TestSharedMountsResolvesSymlinkedSource(t *testing.T) {

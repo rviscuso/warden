@@ -8,17 +8,22 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rviscuso/warden/internal/docker"
+	"github.com/rviscuso/warden/internal/proxy"
 )
 
 // Exit codes.
@@ -47,6 +52,12 @@ type env struct {
 	dockerPaths []string
 	newRunner   func(docker.Options) (docker.Runner, error)
 	systemDirs  []string // nil in production: mounts.DefaultSystemDirs
+
+	// warden proxy
+	listen   func(address string) (net.Listener, error)
+	signals  func() (context.Context, context.CancelFunc) // done on SIGTERM or SIGINT
+	resolver proxy.Resolver
+	dialer   proxy.Dialer
 }
 
 // Run executes the command line args (args[0] is the program name) and
@@ -68,6 +79,15 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		goarch:      runtime.GOARCH,
 		dockerPaths: docker.BinaryPaths,
 		newRunner:   func(o docker.Options) (docker.Runner, error) { return docker.New(o) },
+
+		listen: func(address string) (net.Listener, error) {
+			return (&net.ListenConfig{}).Listen(context.Background(), "tcp", address)
+		},
+		signals: func() (context.Context, context.CancelFunc) {
+			return signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		},
+		resolver: net.DefaultResolver,
+		dialer:   &net.Dialer{},
 	}, args)
 }
 
@@ -157,18 +177,7 @@ func commands() []*command {
 			summary: "The egress proxy (internal)",
 			detail:  "The egress proxy itself. Internal: it runs only inside Warden's proxy container, where WARDEN_ROLE=proxy is set.",
 			hidden:  true,
-			define: func(fs *flag.FlagSet) func(*env, []string) int {
-				return func(e *env, pos []string) int {
-					if e.getenv("WARDEN_ROLE") != "proxy" {
-						fmt.Fprintln(e.stderr, "warden proxy: refusing to run: WARDEN_ROLE=proxy is not set (this command runs only inside Warden's proxy container)")
-						return ExitFail
-					}
-					if len(pos) > 0 {
-						return usageError(e, "proxy", "unexpected arguments: "+strings.Join(pos, " "))
-					}
-					return notImplemented(e, "proxy")
-				}
-			},
+			define:  defineProxy,
 		},
 	}
 }

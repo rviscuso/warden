@@ -227,13 +227,83 @@ A working prototype of this design was tested on a real host (see "Prototype res
   decision, reason, bytes up and down, duration), to stdout. A deny is one line with its reason.
 - Takes its allowlist and ports from flags that Warden passes; it reads no config file.
 
+Precisely:
+
+- **Flags.** `--listen` (default `:3128`); `--allow <entry>`, repeated, at least one; `--ports`,
+  comma-separated (default `443`), each 1 to 65535, no duplicates. Allow entries are validated with
+  the same rules as `egress.allow` in the config, duplicates included: the proxy doesn't trust its
+  flags because Warden wrote them. A bad flag is a usage error (exit 2). The `WARDEN_ROLE` check
+  comes first.
+- **Limits are constants, not flags:** 10 s to read the request headers, 8 KiB of headers (`net/http`
+  adds its own small allowance on top), 5 s to resolve, a 10 s total dial budget with at most 5 s per
+  address, and at most 256 concurrent tunnels. At the cap a request is refused at once, never queued.
+  Writing a refusal to a slow client may take 25 s (header + resolve + dial budget, so the slowest
+  502 or 504 still gets out); that deadline is cleared after `Hijack`.
+- **Built on `net/http.Server`** with `Hijack` for the tunnel. Requests that `net/http` itself rejects
+  before the handler runs (malformed request line, oversized or slow headers) get its own 4xx and no
+  log line.
+- **Target.** Only the CONNECT request target counts; it must be `host:port` with an explicit,
+  canonical decimal port. The `Host` header is ignored. The host is lowercased and one trailing dot
+  removed. IP literals are refused with their own reason before the allowlist: anything
+  `netip.ParseAddr` accepts (including bracketed IPv6 and zones), and numeric forms resolvers may
+  accept (`2130706433`, `0x7f.1`, `127.1`: the last label is all digits or `0x` hex). Anything else
+  that isn't LDH labels is `invalid host`.
+- **Leading dot.** `.claude.com` matches `claude.com` itself and every subdomain.
+- **Order of checks:** method, target, port, IP literal, host syntax, allowlist, tunnel cap, resolve,
+  address policy, dial. Every refused request gets `Connection: close`.
+- **Status codes:** 405 not `CONNECT`; 400 malformed target or invalid host; 403 port, IP literal,
+  host not allowed, or a non-public address; 503 at the tunnel cap; 502 the name doesn't resolve or
+  every dial failed; 504 every dial timed out or the dial budget ran out.
+- **Address policy.** IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is unmapped and checked as IPv4. An address
+  with a zone is refused. IPv4 is refused in: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`,
+  `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`,
+  `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`
+  (which includes broadcast). IPv6 must be inside global unicast `2000::/3` (that alone refuses
+  `::`, `::1`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, discard `100::/64`, ULA `fc00::/7`,
+  link-local `fe80::/10`, site-local `fec0::/10` and multicast `ff00::/8`; each still gets its own
+  reason) and outside `2001::/23` (IETF protocol assignments, including Teredo `2001::/32`),
+  `2001:db8::/32` and `3fff::/20` (documentation) and 6to4 `2002::/16`. Anything that can't be
+  classified is refused.
+- **Mixed answers.** If a name resolves to any non-public address, the whole request is refused,
+  even if other addresses are public. No addresses at all is a resolve failure.
+- **Dialing.** The name is resolved once; the proxy dials `IP:port` only, never the name. IPv4
+  addresses are tried before IPv6 (Docker bridge networks are IPv4-only by default), in resolver
+  order within each family, each with its own 5 s timeout inside the 10 s total.
+- **Tunnel.** The proxy writes the `open` log line, then `200 Connection Established`, then splices.
+  Bytes the client sent after the request (already buffered by `net/http`) are forwarded first. Any
+  read or write deadline left by `net/http` is cleared after `Hijack`. On EOF in one direction the
+  other side gets `CloseWrite` (half-close); the tunnel ends when both directions are done. An error
+  in either direction closes both sides. TCP keepalive stays on for both connections, so dead peers
+  are still detected; there is no idle timeout.
+- **Shutdown.** On SIGTERM or SIGINT the proxy stops accepting, closes every open tunnel, writes
+  their `close` lines and exits 0.
+- **Log lines.** One JSON object per line on stdout:
+  `time` (RFC 3339, UTC), `id` (per-request counter, joins `open` and `close`), `event` (`start`,
+  `open`, `close` or `deny`), `client`, `host`, `port`, `decision` (`allow`, `deny` or `error`),
+  `reason`, `bytes_up` (client to server), `bytes_down`, `duration_ms`. Every field is present on
+  `open`, `close` and `deny` lines. `host` is the normalized host once it parses, otherwise the raw
+  target cut to 255 bytes. `open` is written only after a successful dial, and if it can't be written
+  the tunnel is not opened (502). A request that is allowed but fails to resolve or dial is one
+  `deny` line with `decision: error`. The `start` line carries `listen` (the bound address), `allow`
+  and `ports`. Nothing from inside a tunnel is ever logged.
+- **Reasons.** `open`: `allowlist: <entry>`, the entry that matched. `close`: `closed`, `shutdown`,
+  `client to server: <error>` or `server to client: <error>`. `deny`: `method not allowed`,
+  `invalid target: …`, `port not allowed`, `ip literal`, `invalid host`, `host not allowed`,
+  `too many tunnels`, `shutting down`, `non-public address: …`, `resolve failed: …`,
+  `dial failed …` or `dial timed out …`.
+- Domain fronting is not checked (no SNI inspection); see `DESIGN.md` §2.
+
 Proxy container: `runtime_image`, the `warden` binary bind-mounted read-only, command
 `warden proxy --listen :3128 --allow … --ports 443`, `WARDEN_ROLE=proxy`, hardening from
 `internal/hardening`, on both networks, container name `warden-proxy`.
 
 Tests: allowlist matching (exact, subdomain, case, trailing dot, near-misses like
 `evilapi.anthropic.com` and `api.anthropic.com.evil.org`), every deny path, private-address
-refusal, a full tunnel against a local listener, and log lines for open and close.
+refusal, a full tunnel against a local listener, and log lines for open and close. Tests inject a
+resolver and a dialer: the resolver answers with well-known public addresses (`1.1.1.1`,
+`2606:4700:4700::1111`; each use carries a comment saying why), and the dialer records the address
+it was asked for and connects to a local listener. The address policy itself is never relaxed for
+tests.
 
 ## Checks
 
@@ -410,6 +480,12 @@ on the host with Docker access, which is root-equivalent.
   (already local), named `warden-e2e-<random>` with label `warden.e2e=1`, mounting the e2e
   workspace read-only, and always removes it (defer plus trap). Nothing is ever pulled: if the image
   isn't local, that test reports SKIP.
+- The proxy live tests run the real `warden proxy` on the host, listening on `127.0.0.1`, and change
+  nothing. The tunnel test first connects directly with TLS to `api.anthropic.com:443`: if that
+  fails there is no network and it reports SKIP; if it works and the proxied connection fails, it
+  fails. It also checks a deny and the log lines. The private-address test allows `localtest.me`, a
+  public name that resolves to `127.0.0.1`, and expects the non-public-address refusal; if the name
+  doesn't resolve only to loopback addresses at test time, it reports SKIP, never a pass.
 
 ## Milestones (one pull request each, reviewed before the next starts)
 
