@@ -30,6 +30,29 @@ Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
 - A command whose milestone hasn't landed yet prints `not implemented` to stderr and exits 1.
 - `warden version` reads Go's embedded build info (`runtime/debug.ReadBuildInfo`): the module
   version, `vcs.revision` and `vcs.modified`. No `-ldflags`.
+- Every command except `version` and `--help` refuses to run as root (effective UID 0), at
+  startup, before touching anything.
+
+## `init` and `check`
+
+`init`:
+1. Creates the config, state and share directories (0700) if missing; an existing one that is
+   looser than 0700 or not the user's fails with the exact fix.
+2. If `config.json` is missing: fails (exit 1), naming the config path on stderr, and prints a
+   valid example config to stdout with a short explanation of each field on stderr (so stdout can
+   be redirected straight into the file). JSON has no comments, so none are written. In milestone 2
+   a placeholder `sha256:` for `controller.image` is fine: nothing uses the image yet.
+3. Runs every check except `daemon.pin`. On any fail: exit 1, state unchanged.
+4. Pins the daemon. If a pin exists with a different daemon ID or socket, re-pinning is a trust
+   change: it prints the old and new values and asks `Re-pin to the new daemon? [y/N]` (on stderr).
+   Anything but `y` keeps the old pin and exits 1. This happens only after every other check passes.
+
+`check` runs the same checks plus `daemon.pin`, read-only: it creates nothing, and fails with
+"run warden init" if a directory or the state file is missing.
+
+`state.json` (0600, written atomically) holds:
+`{version: 1, warden_version, daemon: {id, socket, server_version, runc, containerd, compose}, initialized_at}`.
+`warden_version` comes from build info. `daemon.pin` compares both the daemon ID and the socket.
 
 ## Directories
 
@@ -215,7 +238,20 @@ refusal, a full tunnel against a local listener, and log lines for open and clos
 ## Checks
 
 Each check returns `{id, title, status: pass|warn|fail, detail, fix}`. `fix` is an exact command
-or instruction for the user. Output is one table (or JSON with `--json`). Any `fail` → exit 1.
+or instruction for the user. Output is one table (or JSON with `--json`). Any `fail` → exit 1;
+otherwise exit 0 (warnings don't change the exit code).
+
+- Table: columns `STATUS ID DETAIL`, with the fix on an indented line below each failing or
+  warning check. JSON: `{"ok": bool, "checks": [{id, title, status, detail, fix}]}`.
+- A check that can't run because a check it depends on failed is itself a **fail**, with detail
+  `not run: depends on <check id>`. Fail closed.
+
+**Config**
+
+| ID | Check | Fail or warn |
+|---|---|---|
+| config.valid | `config.json` exists and passes every config rule | fail, with each error |
+| workspace.valid | The workspace passes mount validation | fail, naming the rule |
 
 **Host**
 
@@ -225,16 +261,25 @@ or instruction for the user. Output is one table (or JSON with `--json`). Any `f
 | host.os | Linux, amd64 or arm64 | fail |
 | host.cgroup2 | `/sys/fs/cgroup/cgroup.controllers` exists | fail |
 | host.docker-cli | `docker` found at a fixed path | fail |
-| host.compose | `docker compose version` works | fail |
+| host.compose | `docker compose version --format json` exits 0 with a non-empty `version` | fail |
 | host.docker-access | The configured socket is accessible to the user | fail, with the fix (add the user to `docker`, log in again); always also prints: "Docker socket access is root-equivalent on this host" |
 | host.shared-mounts | No other container mounts the workspace or a Warden directory | fail, naming each container and mount, with the fix: stop that container or remove the mount |
 
 `host.shared-mounts` works like this: list every container, running or stopped
 (`docker ps -aq`), and `docker inspect` their mounts. For each bind mount, resolve the source
 the same way mount validation resolves paths, and fail if it is, is inside, or contains the
-workspace or any Warden directory (config, state, share). Skip only Warden's own containers:
-those of compose project `warden` (label `com.docker.compose.project=warden`) and the canary's.
+workspace or any Warden directory (config, state, share). A named volume whose options are
+`o=bind` (among its comma-separated `o` options) with a `device` path (`docker volume inspect`)
+exposes a host path too and is treated exactly like a bind mount of `device`.
+
+No container is skipped by name, label or compose project: those can be set by anyone with Docker
+access. In milestone 2 nothing is skipped at all. Skipping Warden's own containers by the container
+IDs Warden recorded (in state, and from the current canary run) arrives in milestones 4 and 6.
 Unit tests use recorded `docker inspect` fixtures.
+
+Version strings are compared by their leading `major.minor.patch` (distribution builds add
+suffixes such as `2.40.3+ds1-0ubuntu1`). The engine, runc, containerd and Compose versions are
+shown in check details and recorded in state; only the engine version can warn.
 
 **Daemon** (parsed from `docker info --format '{{json .}}'` and `docker version --format '{{json .}}'`)
 
@@ -245,7 +290,7 @@ Unit tests use recorded `docker inspect` fixtures.
 | daemon.cgroup | `CgroupVersion` is `2` | fail |
 | daemon.seccomp | `SecurityOptions` has `name=seccomp` | fail |
 | daemon.apparmor | `SecurityOptions` has `name=apparmor` | warn: weaker isolation |
-| daemon.version | Server version recorded; warn if older than the versions listed as tested | warn |
+| daemon.version | Server version recorded; warn if older than Docker Engine 25.0. The detail says whether the version is on the list of tested versions kept in the code (today: 29.1.3, verified live) | warn |
 | daemon.pin | On `check`/`up`/`status`: daemon `ID` equals the pinned ID | fail: "daemon changed; re-run init" |
 
 Parsing is tested against recorded `docker info` JSON fixtures: rootful, rootless, userns-remap,
@@ -342,10 +387,34 @@ A standalone prototype of the proxy was run on a real rootful Docker host:
 - The hardening invariants test above.
 - `cli` tests run commands end to end against a fake runner and temp directories.
 
+## Live tests (`test/e2e`, `scripts/e2e.sh`)
+
+Live tests run on the user's host, against the real daemon, at a reviewed commit. They are the
+only tests that touch Docker. Only run them on commits that have been reviewed: the e2e binary runs
+on the host with Docker access, which is root-equivalent.
+
+- `test/e2e/` builds only with the build tag `e2e`.
+- `scripts/e2e.sh <40-char commit SHA> [repo-url]` (default `https://github.com/rviscuso/warden`):
+  refuses to run as root; refuses a branch name or short SHA, so the commit can't move between
+  review and test; prints the SHA being tested.
+- It creates a temp root under `${XDG_CACHE_HOME:-$HOME/.cache}` (outside `/tmp`, which mount
+  validation forbids), with siblings `ws/`, `config/`, `state/` and `share/`, never nested, and
+  deletes the whole root on exit, including on failure (`trap`).
+- It clones the repo fresh into the temp root and checks out the SHA, then builds and runs the unit
+  tests in a Go container: image pinned by digest in the script (overridable with `GO_IMAGE`; tags
+  refused either way), `--network none --user <uid>:<gid> --cap-drop ALL --security-opt
+  no-new-privileges --read-only --tmpfs /tmp:exec --pids-limit 512 --memory 1g`, `GOCACHE` inside the
+  temp root. It compiles the e2e test binary there, then runs it on the host as the normal user.
+- E2e tests never change anything outside the temp root, with one exception: the
+  `host.shared-mounts` test may `docker create` (never start) one container from the Go build image
+  (already local), named `warden-e2e-<random>` with label `warden.e2e=1`, mounting the e2e
+  workspace read-only, and always removes it (defer plus trap). Nothing is ever pulled: if the image
+  isn't local, that test reports SKIP.
+
 ## Milestones (one pull request each, reviewed before the next starts)
 
 1. Skeleton: module, `cmd/warden`, `internal/cli` with help for every command, `version`, `internal/paths`, `internal/config`, `internal/mounts`, `internal/docker`.
-2. Host and daemon checks (including `host.shared-mounts`), `init` (without canary) and `check`, state file with the daemon pin.
+2. Host and daemon checks (including `host.shared-mounts`), `config.valid` and `workspace.valid`, `init` (without canary) and `check`, state file with the daemon pin, root refusal, and the live-test harness (`test/e2e`, `scripts/e2e.sh`).
 3. `internal/proxy` and `warden proxy`.
 4. `internal/hardening` and the canary (uses the proxy).
 5. Reference controller image in `images/controller/`.

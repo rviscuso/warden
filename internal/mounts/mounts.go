@@ -316,3 +316,30 @@ func within(child, parent string) bool {
 	}
 	return strings.HasPrefix(child, parent+"/")
 }
+
+// Overlap reports how host path a relates to protected path b ("is", "is
+// inside", "contains", or "" if unrelated), comparing every form of each
+// (as written, resolved, partially resolved) exactly as ValidateWorkspace
+// does. It also returns the forms that matched. Both must be absolute. An
+// unresolvable path is an error (callers fail closed).
+func Overlap(a, b string) (rel, formA, formB string, err error) {
+	if !filepath.IsAbs(a) || !filepath.IsAbs(b) {
+		return "", "", "", fmt.Errorf("overlap: %q and %q must be absolute paths", a, b)
+	}
+	as, err := forms(a)
+	if err != nil {
+		return "", "", "", err
+	}
+	bs, err := forms(b)
+	if err != nil {
+		return "", "", "", err
+	}
+	for _, fa := range as {
+		for _, fb := range bs {
+			if r := relation(fa, fb); r != "" {
+				return r, fa, fb, nil
+			}
+		}
+	}
+	return "", "", "", nil
+}

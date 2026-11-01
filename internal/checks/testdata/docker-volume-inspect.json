@@ -1,0 +1,4 @@
+[
+  {"Name":"wsvol","Driver":"local","Mountpoint":"/var/lib/docker/volumes/wsvol/_data","Options":{"device":"@ROOT@/ws/sub","o":"rw,bind","type":"none"}},
+  {"Name":"plainvol","Driver":"local","Mountpoint":"/var/lib/docker/volumes/plainvol/_data","Options":null}
+]

@@ -484,3 +484,38 @@ func TestResolvePartialLoopFailsClosed(t *testing.T) {
 	f.symlink(f.path("loop/a/kube"), "home/u/.kube")
 	f.refused(f.path("home/u/code/repo"), RuleInvalid)
 }
+
+func TestOverlap(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("data/ws")
+	f.symlink(f.path("data/ws"), "srv/ws-link")
+	f.symlink(f.path("data/future"), "srv/dangling") // target missing
+	ws := f.path("data/ws")
+	cases := []struct {
+		a, b string
+		want string
+	}{
+		{ws, ws, "is"},
+		{f.path("data/ws/sub"), ws, "is inside"},
+		{f.path("data"), ws, "contains"},
+		{f.path("srv/ws-link"), ws, "is"},                              // resolved form of a
+		{f.path("srv/ws-link/x"), ws, "is inside"},                     // missing below a link
+		{f.path("data/future/x"), f.path("srv/dangling"), "is inside"}, // dangling b
+		{f.path("srv/repo"), ws, ""},
+		{f.path("data/wsx"), ws, ""}, // no prefix confusion
+	}
+	for _, c := range cases {
+		rel, _, _, err := Overlap(c.a, c.b)
+		if err != nil || rel != c.want {
+			t.Errorf("Overlap(%s, %s) = %q, %v; want %q", c.a, c.b, rel, err, c.want)
+		}
+	}
+	if _, _, _, err := Overlap("rel", ws); err == nil {
+		t.Error("relative path accepted")
+	}
+	f.symlink("l2", "loop2/l1")
+	f.symlink("l1", "loop2/l2")
+	if _, _, _, err := Overlap(f.path("loop2/l1/x"), ws); err == nil {
+		t.Error("loop accepted")
+	}
+}
