@@ -227,6 +227,14 @@ or instruction for the user. Output is one table (or JSON with `--json`). Any `f
 | host.docker-cli | `docker` found at a fixed path | fail |
 | host.compose | `docker compose version` works | fail |
 | host.docker-access | The configured socket is accessible to the user | fail, with the fix (add the user to `docker`, log in again); always also prints: "Docker socket access is root-equivalent on this host" |
+| host.shared-mounts | No other container mounts the workspace or a Warden directory | fail, naming each container and mount, with the fix: stop that container or remove the mount |
+
+`host.shared-mounts` works like this: list every container, running or stopped
+(`docker ps -aq`), and `docker inspect` their mounts. For each bind mount, resolve the source
+the same way mount validation resolves paths, and fail if it is, is inside, or contains the
+workspace or any Warden directory (config, state, share). Skip only Warden's own containers:
+those of compose project `warden` (label `com.docker.compose.project=warden`) and the canary's.
+Unit tests use recorded `docker inspect` fixtures.
 
 **Daemon** (parsed from `docker info --format '{{json .}}'` and `docker version --format '{{json .}}'`)
 
@@ -337,7 +345,7 @@ A standalone prototype of the proxy was run on a real rootful Docker host:
 ## Milestones (one pull request each, reviewed before the next starts)
 
 1. Skeleton: module, `cmd/warden`, `internal/cli` with help for every command, `version`, `internal/paths`, `internal/config`, `internal/mounts`, `internal/docker`.
-2. Host and daemon checks, `init` (without canary) and `check`, state file with the daemon pin.
+2. Host and daemon checks (including `host.shared-mounts`), `init` (without canary) and `check`, state file with the daemon pin.
 3. `internal/proxy` and `warden proxy`.
 4. `internal/hardening` and the canary (uses the proxy).
 5. Reference controller image in `images/controller/`.
