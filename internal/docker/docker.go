@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/rviscuso/warden/internal/paths"
@@ -77,6 +78,8 @@ type Exec struct {
 	binary  string
 	env     []string
 	timeout time.Duration
+	// maxOutput overrides MaxOutput (tests only; 0 means MaxOutput).
+	maxOutput int
 }
 
 var _ Runner = (*Exec)(nil)
@@ -139,17 +142,35 @@ func (e *Exec) Run(ctx context.Context, args []string, stdin io.Reader) ([]byte,
 		ctx, cancel = context.WithTimeout(ctx, e.timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, e.binary, args...)
+	// Overflowing either stream kills docker at once (no point reading
+	// further) and fails the call: output is never silently truncated.
+	runCtx, kill := context.WithCancel(ctx)
+	defer kill()
+	limit := e.maxOutput
+	if limit <= 0 {
+		limit = MaxOutput
+	}
+	stdout := &cappedBuffer{limit: limit, onOverflow: kill}
+	stderr := &cappedBuffer{limit: limit, onOverflow: kill}
+
+	cmd := exec.CommandContext(runCtx, e.binary, args...)
 	cmd.Env = slices.Clone(e.env)
 	cmd.Dir = "/"
 	cmd.Stdin = stdin
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	// If docker leaves a child holding our pipes, don't wait forever.
 	cmd.WaitDelay = 5 * time.Second
 
 	err := cmd.Run()
+	for _, s := range []struct {
+		name string
+		b    *cappedBuffer
+	}{{"stdout", stdout}, {"stderr", stderr}} {
+		if s.b.overflowed() {
+			return nil, nil, -1, fmt.Errorf("docker %s: %s exceeded %d bytes; output discarded", describe(args), s.name, limit)
+		}
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return stdout.Bytes(), stderr.Bytes(), -1, fmt.Errorf("docker %s: %w", describe(args), ctxErr)
 	}
@@ -171,4 +192,47 @@ func describe(args []string) string {
 		return "(no arguments)"
 	}
 	return args[0]
+}
+
+// MaxOutput caps each of stdout and stderr per call.
+const MaxOutput = 16 << 20 // 16 MiB
+
+// cappedBuffer collects up to limit bytes. Past the limit it records the
+// overflow, calls onOverflow once and drops further bytes, still reporting
+// them as written so the copying goroutine never blocks the child.
+type cappedBuffer struct {
+	mu         sync.Mutex
+	buf        bytes.Buffer
+	limit      int
+	overflow   bool
+	onOverflow func()
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.overflow {
+		return len(p), nil
+	}
+	if b.buf.Len()+len(p) > b.limit {
+		b.overflow = true
+		b.buf.Reset()
+		if b.onOverflow != nil {
+			b.onOverflow()
+		}
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func (b *cappedBuffer) overflowed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.overflow
+}
+
+func (b *cappedBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Bytes()
 }

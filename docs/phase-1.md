@@ -163,6 +163,9 @@ Tests cover each rule, symlinks pointing into a forbidden path, `..` segments, a
   permissions silently.
 - argv only. Never `sh -c`.
 - Every call has a timeout: 30 seconds by default; callers override it (`docker compose up`/`down`: 5 minutes).
+  A caller overrides it by passing a context with a deadline.
+- stdout and stderr are each capped at 16 MiB per call. Exceeding either stops docker and fails the
+  call with an error; output is never silently truncated.
 
 ## Hardening (`internal/hardening`)
 

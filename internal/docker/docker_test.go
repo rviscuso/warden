@@ -46,6 +46,21 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Fprint(os.Stderr, "err")
 		code, _ := strconv.Atoi(args[0])
 		os.Exit(code)
+	case "spew": // spew <stdout|stderr> <n|forever>
+		w := os.Stdout
+		if args[0] == "stderr" {
+			w = os.Stderr
+		}
+		chunk := make([]byte, 4096)
+		if args[1] == "forever" {
+			for {
+				if _, err := w.Write(chunk); err != nil {
+					os.Exit(1)
+				}
+			}
+		}
+		n, _ := strconv.Atoi(args[1])
+		w.Write(make([]byte, n))
 	case "sleep":
 		d, _ := time.ParseDuration(args[0])
 		time.Sleep(d)
@@ -354,5 +369,73 @@ func TestFindBinary(t *testing.T) {
 func TestBinaryPaths(t *testing.T) {
 	if !slices.Equal(BinaryPaths, []string{"/usr/bin/docker", "/usr/local/bin/docker"}) {
 		t.Fatalf("BinaryPaths = %v", BinaryPaths)
+	}
+}
+
+func TestMaxOutputValue(t *testing.T) {
+	if MaxOutput != 16<<20 {
+		t.Fatalf("MaxOutput = %d", MaxOutput)
+	}
+}
+
+func TestOutputAtCapIsKept(t *testing.T) {
+	r := newSetup(t).runner(t)
+	r.maxOutput = 1024
+	for _, stream := range []string{"stdout", "stderr"} {
+		out, errOut, code, err := r.Run(context.Background(), helperArgs("spew", stream, "1024"), nil)
+		if err != nil || code != 0 || len(out)+len(errOut) != 1024 {
+			t.Errorf("%s: len %d+%d code %d err %v", stream, len(out), len(errOut), code, err)
+		}
+	}
+}
+
+func TestOutputOverCapIsAnError(t *testing.T) {
+	r := newSetup(t).runner(t)
+	r.maxOutput = 1024
+	for _, stream := range []string{"stdout", "stderr"} {
+		out, errOut, code, err := r.Run(context.Background(), helperArgs("spew", stream, "1025"), nil)
+		if err == nil || !strings.Contains(err.Error(), stream+" exceeded 1024 bytes") {
+			t.Errorf("%s: err %v", stream, err)
+		}
+		if out != nil || errOut != nil || code != -1 {
+			t.Errorf("%s: output must be discarded, got %d+%d bytes, code %d", stream, len(out), len(errOut), code)
+		}
+	}
+}
+
+func TestOutputOverflowKillsDocker(t *testing.T) {
+	// A command that would write forever is stopped at the cap, long
+	// before the runner's timeout.
+	s := newSetup(t)
+	s.opts.Timeout = 20 * time.Second
+	r := s.runner(t)
+	r.maxOutput = 64 << 10
+	start := time.Now()
+	_, _, _, err := r.Run(context.Background(), helperArgs("spew", "stdout", "forever"), nil)
+	if err == nil || !strings.Contains(err.Error(), "stdout exceeded") {
+		t.Fatalf("err %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("took %v: overflow didn't stop docker", elapsed)
+	}
+}
+
+func TestCappedBuffer(t *testing.T) {
+	calls := 0
+	b := &cappedBuffer{limit: 5, onOverflow: func() { calls++ }}
+	for _, w := range []string{"ab", "cde"} {
+		if n, err := b.Write([]byte(w)); n != len(w) || err != nil {
+			t.Fatalf("write %q: %d %v", w, n, err)
+		}
+	}
+	if string(b.Bytes()) != "abcde" || b.overflowed() {
+		t.Fatalf("at cap: %q %v", b.Bytes(), b.overflowed())
+	}
+	if n, err := b.Write([]byte("f")); n != 1 || err != nil {
+		t.Fatalf("overflow write: %d %v", n, err)
+	}
+	b.Write([]byte("more"))
+	if !b.overflowed() || calls != 1 || len(b.Bytes()) != 0 {
+		t.Fatalf("after overflow: %v, %d calls, %q", b.overflowed(), calls, b.Bytes())
 	}
 }
