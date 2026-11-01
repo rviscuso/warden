@@ -32,6 +32,7 @@ type env struct {
 	stderr    io.Writer
 	getenv    func(string) string
 	buildInfo func() (*debug.BuildInfo, bool)
+	geteuid   func() int
 }
 
 // Run executes the command line args (args[0] is the program name) and
@@ -43,6 +44,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		stderr:    stderr,
 		getenv:    os.Getenv,
 		buildInfo: debug.ReadBuildInfo,
+		geteuid:   os.Geteuid,
 	}, args)
 }
 
@@ -214,6 +216,10 @@ func run(e *env, args []string) int {
 	}
 	if err != nil {
 		return usageError(e, c.name, err.Error())
+	}
+	if c.name != "version" && e.geteuid() == 0 {
+		fmt.Fprintf(e.stderr, "warden %s: refusing to run as root: run Warden as your own user, not root or sudo\n", c.name)
+		return ExitFail
 	}
 	return runFn(e, pos)
 }

@@ -23,6 +23,7 @@ func runWith(t *testing.T, vars map[string]string, bi *debug.BuildInfo, args ...
 		buildInfo: func() (*debug.BuildInfo, bool) {
 			return bi, bi != nil
 		},
+		geteuid: func() int { return euid },
 	}
 	code := run(e, append([]string{"warden"}, args...))
 	return result{code, out.String(), errb.String()}
@@ -207,5 +208,47 @@ func TestRunUsesRealProcess(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.String(), "warden ") {
 		t.Fatalf("stdout %q", out.String())
+	}
+}
+
+// euid is the effective UID the fake environment reports.
+var euid = 1000
+
+func asRoot(t *testing.T) {
+	t.Helper()
+	euid = 0
+	t.Cleanup(func() { euid = 1000 })
+}
+
+func TestRootIsRefused(t *testing.T) {
+	asRoot(t)
+	for _, args := range [][]string{
+		{"init"}, {"check", "--json"}, {"up"}, {"down"}, {"status"}, {"logs", "proxy"},
+	} {
+		r := runWith(t, map[string]string{"WARDEN_ROLE": "proxy"}, nil, args...)
+		if r.code != ExitFail || r.stdout != "" || !strings.Contains(r.stderr, "refusing to run as root") {
+			t.Errorf("%v as root: got %+v", args, r)
+		}
+	}
+	r := runWith(t, map[string]string{"WARDEN_ROLE": "proxy"}, nil, "proxy")
+	if r.code != ExitFail || !strings.Contains(r.stderr, "refusing to run as root") {
+		t.Errorf("proxy as root: got %+v", r)
+	}
+}
+
+func TestRootMayAskForHelpAndVersion(t *testing.T) {
+	asRoot(t)
+	for _, args := range [][]string{{"--help"}, {"version"}, {"init", "--help"}, {"proxy", "-h"}} {
+		if r := runCLI(t, args...); r.code != ExitOK {
+			t.Errorf("%v as root: got %+v", args, r)
+		}
+	}
+}
+
+func TestFlagErrorsBeatRootRefusal(t *testing.T) {
+	// A bad flag is reported as a usage error (exit 2), even as root.
+	asRoot(t)
+	if r := runCLI(t, "init", "--bogus"); r.code != ExitUsage {
+		t.Errorf("got %+v", r)
 	}
 }
