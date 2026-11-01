@@ -145,13 +145,20 @@ user's files: anything mounted into the container is fully writable to it. What 
 rest of the user's files out of reach is that they aren't mounted at all. Mount validation
 is therefore what enforces "repo only", and it gets its own tests.
 
-Every host path is resolved (symlinks followed) before checking, and Warden refuses a
-workspace that:
+Every host path is made absolute and resolved (symlinks followed, `..` resolved physically)
+before checking, and only the resolved path is mounted. Warden refuses a workspace that:
+- doesn't exist, isn't a directory, or isn't owned by the invoking user;
 - is `/`, the user's home directory, or any ancestor of the home directory;
 - is, is inside, or contains Warden's config, state or share directories;
-- contains the home directory's dotfiles or credential directories (`~/.ssh`, `~/.config`, `~/.aws`, `~/.docker`, `~/.gnupg`, `~/.kube`, …);
-- contains the Docker socket or any system directory (`/etc`, `/usr`, `/var`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`);
-- isn't owned by the invoking user.
+- is, is inside, or contains any of the home directory's dotfiles or credential paths: `~/.ssh`, `~/.config`, `~/.local`, `~/.aws`, `~/.azure`, `~/.docker`, `~/.gnupg`, `~/.kube`, `~/.netrc`, `~/.bashrc`, `~/.profile`, `~/.zshrc`;
+- is, is inside, or contains a system directory (`/etc`, `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/var`, `/boot`, `/proc`, `/sys`, `/dev`, `/run`, `/root`, `/tmp`, `/snap`) or the Docker socket.
+
+Each forbidden path is compared as written, as resolved when it exists, and partially resolved
+(every symlink followed, even a dangling one, with missing components kept as written), so a
+symlink can't move a forbidden path out of reach, now or once its target is created. A forbidden
+path that doesn't exist is not an error; any other resolution failure refuses the workspace.
+`/opt`, `/srv`, `/mnt` and `/media` are allowed; the ownership rule covers them. The exact rules
+and their tests are in `docs/phase-1.md`.
 
 **Controller image contract**
 
