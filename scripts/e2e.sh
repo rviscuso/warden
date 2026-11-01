@@ -15,7 +15,7 @@
 set -euo pipefail
 
 # The Go build image, pinned by digest. Override with GO_IMAGE (also pinned).
-GO_IMAGE_PINNED=""   # TODO: golang@sha256:<64 hex>, set in review
+GO_IMAGE_PINNED="golang@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9" # golang:1.27-bookworm, from the operator's host
 
 die() { echo "e2e: $*" >&2; exit 1; }
 
