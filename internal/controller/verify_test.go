@@ -11,9 +11,13 @@ import (
 // procStatus is a fixture /proc/<pid>/status. Fields in tabs, as the
 // kernel writes them.
 func procStatus(name string, ppid, uid, gid int, capEff, capBnd string, nnp int) string {
+	return procStatusFull(name, ppid, uid, gid, capEff, capBnd, zeroCaps, zeroCaps, nnp, 2)
+}
+
+func procStatusFull(name string, ppid, uid, gid int, capEff, capBnd, capPrm, capAmb string, nnp, seccomp int) string {
 	return fmt.Sprintf("Name:\t%s\nUmask:\t0022\nState:\tS (sleeping)\nPPid:\t%d\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nGroups:\t\n"+
-		"CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t%s\nCapBnd:\t%s\nCapAmb:\t0000000000000000\nNoNewPrivs:\t%d\nSeccomp:\t2\n",
-		name, ppid, uid, uid, uid, uid, gid, gid, gid, gid, capEff, capBnd, nnp)
+		"CapInh:\t0000000000000000\nCapPrm:\t%s\nCapEff:\t%s\nCapBnd:\t%s\nCapAmb:\t%s\nNoNewPrivs:\t%d\nSeccomp:\t%d\n",
+		name, ppid, uid, uid, uid, uid, gid, gid, gid, gid, capPrm, capEff, capBnd, capAmb, nnp, seccomp)
 }
 
 // FakeProc writes <root>/proc/<pid>/status for each pid.
@@ -62,6 +66,18 @@ func TestVerifyFails(t *testing.T) {
 		"main bounding set": {func(m map[int]string) {
 			m[501] = procStatus("claude", 500, 1000, 1000, zeroCaps, "00000000a80425fb", 1)
 		}, "CapBnd"},
+		"main permitted caps": {func(m map[int]string) {
+			m[501] = procStatusFull("claude", 500, 1000, 1000, zeroCaps, zeroCaps, "0000000000000400", zeroCaps, 1, 2)
+		}, "CapPrm 0000000000000400"},
+		"main ambient caps": {func(m map[int]string) {
+			m[501] = procStatusFull("claude", 500, 1000, 1000, zeroCaps, zeroCaps, zeroCaps, "0000000000000400", 1, 2)
+		}, "CapAmb 0000000000000400"},
+		"main no seccomp": {func(m map[int]string) {
+			m[501] = procStatusFull("claude", 500, 1000, 1000, zeroCaps, zeroCaps, zeroCaps, zeroCaps, 1, 0)
+		}, "Seccomp 0, want 2"},
+		"init no seccomp": {func(m map[int]string) {
+			m[500] = procStatusFull("docker-init", 1, 1000, 1000, zeroCaps, zeroCaps, zeroCaps, zeroCaps, 1, 0)
+		}, "init (pid 500, docker-init): Seccomp"},
 		"main new privs": {func(m map[int]string) { m[501] = procStatus("claude", 500, 1000, 1000, zeroCaps, zeroCaps, 0) }, "NoNewPrivs 0"},
 		"init capabilities": {func(m map[int]string) {
 			m[500] = procStatus("docker-init", 1, 1000, 1000, "00000000a80425fb", zeroCaps, 1)

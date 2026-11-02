@@ -15,10 +15,11 @@ const zeroCaps = "0000000000000000"
 // ProcStatus is the part of /proc/<pid>/status that verification reads.
 // Uid and Gid hold all four fields, space-separated.
 type ProcStatus struct {
-	PID                        int
-	Name, PPid                 string
-	Uid, Gid                   string
-	CapEff, CapBnd, NoNewPrivs string
+	PID                            int
+	Name, PPid                     string
+	Uid, Gid                       string
+	CapEff, CapBnd, CapPrm, CapAmb string
+	NoNewPrivs, Seccomp            string
 }
 
 // readProcStatus reads <root>/proc/<pid>/status. A missing field is an
@@ -45,7 +46,8 @@ func readProcStatus(root string, pid int) (ProcStatus, error) {
 	s := ProcStatus{PID: pid}
 	for name, dst := range map[string]*string{
 		"Name": &s.Name, "PPid": &s.PPid, "Uid": &s.Uid, "Gid": &s.Gid,
-		"CapEff": &s.CapEff, "CapBnd": &s.CapBnd, "NoNewPrivs": &s.NoNewPrivs,
+		"CapEff": &s.CapEff, "CapBnd": &s.CapBnd, "CapPrm": &s.CapPrm, "CapAmb": &s.CapAmb,
+		"NoNewPrivs": &s.NoNewPrivs, "Seccomp": &s.Seccomp,
 	} {
 		v, ok := fields[name]
 		if !ok {
@@ -66,14 +68,18 @@ func (s ProcStatus) Problems(uid, gid int) []string {
 	if s.Gid != strings.Repeat(g+" ", 3)+g {
 		out = append(out, fmt.Sprintf("Gid %q, want %s in all four fields", s.Gid, g))
 	}
-	if s.CapEff != zeroCaps {
-		out = append(out, "CapEff "+s.CapEff+", want "+zeroCaps)
-	}
-	if s.CapBnd != zeroCaps {
-		out = append(out, "CapBnd "+s.CapBnd+", want "+zeroCaps)
+	for _, c := range []struct{ name, v string }{
+		{"CapEff", s.CapEff}, {"CapBnd", s.CapBnd}, {"CapPrm", s.CapPrm}, {"CapAmb", s.CapAmb},
+	} {
+		if c.v != zeroCaps {
+			out = append(out, c.name+" "+c.v+", want "+zeroCaps)
+		}
 	}
 	if s.NoNewPrivs != "1" {
 		out = append(out, "NoNewPrivs "+s.NoNewPrivs+", want 1")
+	}
+	if s.Seccomp != "2" {
+		out = append(out, "Seccomp "+s.Seccomp+", want 2 (filter mode)")
 	}
 	return out
 }

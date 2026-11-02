@@ -25,7 +25,7 @@ func (h *host) proc(pid, ppid int, name string, uid, gid int, capEff string) {
 	h.t.Helper()
 	dir := filepath.Join(h.root, "hostfs", "proc", fmt.Sprint(pid))
 	os.MkdirAll(dir, 0o755)
-	status := fmt.Sprintf("Name:\t%s\nPPid:\t%d\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nCapEff:\t%s\nCapBnd:\t0000000000000000\nNoNewPrivs:\t1\n",
+	status := fmt.Sprintf("Name:\t%s\nPPid:\t%d\nUid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\nCapEff:\t%s\nCapBnd:\t0000000000000000\nCapPrm:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n",
 		name, ppid, uid, uid, uid, uid, gid, gid, gid, gid, capEff)
 	if err := os.WriteFile(filepath.Join(dir, "status"), []byte(status), 0o644); err != nil {
 		h.t.Fatal(err)
