@@ -478,7 +478,8 @@ Precisely:
 
 Built by the user for now (`docker build`), then referenced in config by image ID. It follows the
 image contract in `DESIGN.md`:
-- `debian:bookworm-slim` base, pinned by digest; `ca-certificates`, `git`, `ripgrep`, `less`, `procps`;
+- `debian:trixie-slim` base (Debian 13, the current stable release; bookworm is past its regular
+  security support), pinned by digest; `ca-certificates`, `git`, `ripgrep`, `less`, `procps`;
 - Claude Code installed **outside `$HOME`**;
 - no `USER root` entrypoint, no firewall, no `iptables`: the image runs as whatever UID Warden passes;
 - `HOME=/home/agent`, `WORKDIR /workspace`.
@@ -488,12 +489,14 @@ outside `$HOME`. If it doesn't, stop and present the alternatives.
 
 Answer (M5): it doesn't. `install.sh` downloads to `~/.claude/downloads` and runs `claude install`,
 which puts the launcher and versions under `~/.local`; the script says "This installer puts
-everything under $HOME". The alternatives are in the M5 pull request. **Proposed, pending
-approval:** skip the installer and fetch the native binary itself, the way `install.sh` does, at a
-pinned version, verified against a SHA-256 pinned in the Dockerfile.
+everything under $HOME". The alternatives are in the M5 pull request. **Decided in review:**
+skip the installer and fetch the native binary itself, the way `install.sh` does, at a pinned
+version, verified against a SHA-256 pinned in the Dockerfile (alternative A). We may switch later to
+running the official installer at build time (alternative B), to keep a standard Claude Code install.
 
-Precisely (**proposed in M5, pending approval**):
+Precisely (decided in the M5 review):
 
+- **Version:** the `stable` channel (today 2.1.309), not `latest`.
 - **Claude Code** comes from `https://downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`
   (the URL `install.sh` uses), through `ADD --checksum=sha256:<hex> --chmod=0755`, to
   `/usr/local/bin/claude`, owned by root. The version and one checksum per architecture (`linux-x64`,
