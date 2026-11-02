@@ -33,6 +33,14 @@ GO_IMAGE=${GO_IMAGE:-$GO_IMAGE_PINNED}
 RUNTIME_IMAGE=${RUNTIME_IMAGE:-$RUNTIME_IMAGE_PINNED}
 [[ $RUNTIME_IMAGE =~ ^[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || die "RUNTIME_IMAGE must be pinned by digest (name@sha256:<64 hex>), not a tag: $RUNTIME_IMAGE"
 
+# Optional: the controller image you built (images/controller), by image ID or digest,
+# for TestControllerImage. Without it that test reports SKIP. Never built or pulled here.
+CONTROLLER_IMAGE=${CONTROLLER_IMAGE:-}
+if [[ -n $CONTROLLER_IMAGE ]]; then
+	[[ $CONTROLLER_IMAGE =~ ^(sha256:[0-9a-f]{64}|[a-z0-9._/-]+@sha256:[0-9a-f]{64})$ ]] ||
+		die "CONTROLLER_IMAGE must be an image ID (sha256:<64 hex>) or pinned by digest, not a tag: $CONTROLLER_IMAGE"
+fi
+
 SOCKET=${WARDEN_E2E_SOCKET:-/var/run/docker.sock}
 UID_GID="$(id -u):$(id -g)"
 
@@ -67,6 +75,10 @@ dock image inspect "$GO_IMAGE" >/dev/null 2>&1 ||
 	die "$GO_IMAGE is not local and nothing is pulled; pull it yourself first: docker pull $GO_IMAGE"
 dock image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1 ||
 	die "$RUNTIME_IMAGE is not local and nothing is pulled; pull it yourself first: docker pull $RUNTIME_IMAGE"
+if [[ -n $CONTROLLER_IMAGE ]]; then
+	dock image inspect "$CONTROLLER_IMAGE" >/dev/null 2>&1 ||
+		die "$CONTROLLER_IMAGE is not local; build it first: docker build -t warden-controller images/controller"
+fi
 
 git clone --quiet --no-checkout "$REPO" "$ROOT/src"
 git -C "$ROOT/src" -c advice.detachedHead=false checkout --quiet "$SHA"
@@ -80,6 +92,7 @@ cmp -s -- "$SELF" "$ROOT/src/scripts/e2e.sh" ||
 echo "e2e: testing $SHA"
 echo "e2e: Go image $GO_IMAGE"
 echo "e2e: runtime image $RUNTIME_IMAGE"
+echo "e2e: controller image ${CONTROLLER_IMAGE:-none (TestControllerImage will SKIP)}"
 
 # One container per step, argv only. The source is read-only.
 in_go() {
@@ -116,6 +129,7 @@ env \
 	WARDEN_E2E_SHA="$SHA" \
 	WARDEN_E2E_GO_IMAGE="$GO_IMAGE" \
 	WARDEN_E2E_RUNTIME_IMAGE="$RUNTIME_IMAGE" \
+	WARDEN_E2E_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
 	WARDEN_E2E_CONTAINERS="$ROOT/containers" \
 	WARDEN_E2E_SOCKET="$SOCKET" \
 	WARDEN_E2E_WORKSPACE="$ROOT/ws" \
