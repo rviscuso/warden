@@ -214,11 +214,12 @@ const exampleConfig = `{
 const exampleExplanation = `An example config is printed on stdout. Fields:
   version                  always 1
   docker.socket            the Docker daemon's socket (optional; this is the default)
-  runtime_image            stock image for Warden's own containers, pinned by digest
-                           (name@sha256:<64 hex>); not used until milestone 4
+  runtime_image            stock image for Warden's own containers (proxy, canary), pinned by
+                           digest (name@sha256:<64 hex>); it must be local: docker pull it first
   egress.allow             hostnames the sandbox may reach; a leading dot allows subdomains
-  controller.image         the controller image ID (sha256:<64 hex>); a placeholder is fine
-                           until milestone 6
+  controller.image         the controller image ID (sha256:<64 hex>): docker build -t
+                           warden-controller images/controller, then
+                           docker image inspect --format '{{.Id}}' warden-controller
   controller.workspace     absolute path of the repository the agent may change
   controller.remote_control_name   name shown in Claude's Remote Control
   controller.resources     memory_mb 256-65536, cpus 0.25-64, pids 64-32768`
