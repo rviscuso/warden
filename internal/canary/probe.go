@@ -33,7 +33,7 @@ const (
 var Keys = []string{
 	"caps_eff", "caps_bnd", "nnp", "seccomp", "uid", "gid", "groups",
 	"memory_max", "memory_swap_max", "pids_max", "cpu_max", "apparmor",
-	"rootfs", "tmp_write", "tmp_mount",
+	"rootfs", "tmp_write", "tmp_mount", "mptcp",
 	"no_route", "no_dns", "no_host", "proxy_allow", "proxy_deny", "owner",
 }
 
@@ -105,6 +105,7 @@ func Probe(ctx context.Context, o ProbeOptions, env ProbeEnv, w io.Writer) error
 		"memory_max": "sys/fs/cgroup/memory.max", "memory_swap_max": "sys/fs/cgroup/memory.swap.max",
 		"pids_max": "sys/fs/cgroup/pids.max", "cpu_max": "sys/fs/cgroup/cpu.max",
 		"apparmor": "proc/self/attr/current",
+		"mptcp":    "proc/sys/net/mptcp/enabled",
 	} {
 		obs[key] = readValue(p(file))
 	}

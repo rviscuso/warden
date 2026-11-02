@@ -132,7 +132,7 @@ func (c *Canary) ProbeOutput(over map[string]string) string {
 		"caps_eff": "0000000000000000", "caps_bnd": "0000000000000000", "nnp": "1", "seccomp": "2",
 		"uid": u + " " + u + " " + u + " " + u, "gid": g + " " + g + " " + g + " " + g, "groups": "",
 		"memory_max": "1610612736", "memory_swap_max": "0", "pids_max": "512", "cpu_max": "150000 100000",
-		"apparmor": "docker-default (enforce)", "rootfs": "erofs", "tmp_write": "ok",
+		"apparmor": "docker-default (enforce)", "rootfs": "erofs", "tmp_write": "ok", "mptcp": "0",
 		"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,relatime super=rw,size=524288k,mode=1777",
 		"no_route":  "failed: network is unreachable", "no_dns": "failed: no such host",
 		"no_host": "failed: connection refused", "proxy_allow": "status=200", "proxy_deny": "status=403", "owner": "written",

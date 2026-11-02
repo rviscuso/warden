@@ -95,6 +95,7 @@ var ProbeChecks = []struct{ ID, Title string }{
 	{"canary.apparmor", "AppArmor profile"},
 	{"canary.rootfs", "Read-only root filesystem"},
 	{"canary.tmp", "Writable /tmp tmpfs"},
+	{"canary.mptcp", "MPTCP off"},
 	{"canary.no-route", "No direct route out"},
 	{"canary.no-dns", "No outside DNS"},
 	{"canary.no-host", "Host unreachable"},
@@ -167,6 +168,8 @@ func evaluate(id string, o map[string]string, e Expect, h Host) (Status, string)
 	case "canary.tmp":
 		ok, why := tmpOK(o["tmp_mount"])
 		return pf(o["tmp_write"] == "ok" && ok, fmt.Sprintf("write %s; %s%s", o["tmp_write"], o["tmp_mount"], why))
+	case "canary.mptcp":
+		return pf(o["mptcp"] == "0", "net.mptcp.enabled "+o["mptcp"]+" (want 0)")
 	case "canary.no-route":
 		if h.RouteControl != nil {
 			return Fail, "cannot prove: host has no route to the control address (" + h.RouteControl.Error() + ")"

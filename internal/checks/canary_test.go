@@ -48,7 +48,7 @@ func TestCanaryAllPass(t *testing.T) {
 	h := newHarness(t)
 	rep := h.run()
 	cr := canaryResults(rep)
-	if len(cr) != 18 {
+	if len(cr) != 19 {
 		t.Fatalf("%d canary results: %v", len(cr), ids(rep))
 	}
 	for id, r := range cr {
@@ -103,7 +103,7 @@ func TestCanaryNotRunAfterAFailure(t *testing.T) {
 			t.Errorf("%s: %s %q", id, r.Status, r.Detail)
 		}
 	}
-	if len(cr) != 18 || h.fake.Called(argsImage) {
+	if len(cr) != 19 || h.fake.Called(argsImage) {
 		t.Fatalf("the canary ran on an unsupported daemon")
 	}
 }

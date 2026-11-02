@@ -90,8 +90,8 @@ func TestCanaryLive(t *testing.T) {
 			t.Errorf("%s: %s %s", c.ID, c.Status, c.Detail)
 		}
 	}
-	if n != 18 {
-		t.Errorf("%d canary checks, want 18", n)
+	if n != 19 {
+		t.Errorf("%d canary checks, want 19", n)
 	}
 	noCanaryLeft(t, s)
 
@@ -105,9 +105,9 @@ func TestCanaryLive(t *testing.T) {
 }
 
 // TestCanaryNegativeControl runs the probe in a deliberately unhardened
-// container (no --cap-drop, no no-new-privileges, writable root, another
-// non-root UID and GID) and requires canary.caps, canary.nnp,
-// canary.rootfs and canary.uid to fail.
+// container (no --cap-drop, no no-new-privileges, writable root, no
+// --sysctl, another non-root UID and GID) and requires canary.caps,
+// canary.nnp, canary.rootfs, canary.uid and canary.mptcp to fail.
 func TestCanaryNegativeControl(t *testing.T) {
 	image := mustEnv(t, "WARDEN_E2E_RUNTIME_IMAGE")
 	r := dockerRunner(t)
@@ -154,7 +154,7 @@ func TestCanaryNegativeControl(t *testing.T) {
 	for _, v := range vs {
 		got[v.ID] = v
 	}
-	for _, id := range []string{"canary.caps", "canary.nnp", "canary.rootfs", "canary.uid"} {
+	for _, id := range []string{"canary.caps", "canary.nnp", "canary.rootfs", "canary.uid", "canary.mptcp"} {
 		if got[id].Status != canary.Fail {
 			t.Errorf("%s: %s (%s) in an unhardened container, want fail", id, got[id].Status, got[id].Detail)
 		}

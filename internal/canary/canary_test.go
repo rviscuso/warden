@@ -34,6 +34,7 @@ func hardenedRoot(t *testing.T) string {
 		"sys/fs/cgroup/pids.max":        "512\n",
 		"sys/fs/cgroup/cpu.max":         "150000 100000\n",
 		"proc/self/attr/current":        "docker-default (enforce)\n",
+		"proc/sys/net/mptcp/enabled":    "0\n",
 		"proc/self/mountinfo": "600 500 0:60 / / ro,relatime - overlay overlay rw,lowerdir=x\n" +
 			"601 600 0:61 / /tmp rw,nosuid,nodev,relatime - tmpfs tmpfs rw,size=524288k,mode=1777,uid=0,gid=0\n",
 	}
@@ -179,7 +180,7 @@ func TestProbeHardened(t *testing.T) {
 			t.Errorf("%s: %s %s", v.ID, v.Status, v.Detail)
 		}
 	}
-	if len(ProbeChecks) != 16 {
+	if len(ProbeChecks) != 17 {
 		t.Errorf("%d probe checks", len(ProbeChecks))
 	}
 }
@@ -195,6 +196,7 @@ func TestProbeUnhardened(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "sys/fs/cgroup/pids.max"), []byte("max\n"), 0o644)
 	os.WriteFile(filepath.Join(root, "sys/fs/cgroup/cpu.max"), []byte("max 100000\n"), 0o644)
 	os.WriteFile(filepath.Join(root, "proc/self/attr/current"), []byte("unconfined\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "proc/sys/net/mptcp/enabled"), []byte("1\n"), 0o644)
 	os.WriteFile(filepath.Join(root, "proc/self/mountinfo"), []byte("600 500 0:60 / / rw,relatime - overlay overlay rw\n"), 0o644)
 	p := newProbe(t, root)
 	p.env.WriteFile = func(name string, data []byte) error { return os.WriteFile(name, data, 0o600) } // a writable root
@@ -203,7 +205,7 @@ func TestProbeUnhardened(t *testing.T) {
 	p.control(t, "no_host=skip\n")
 	vs := verdicts(Evaluate(p.run(t), expect, goodHost(p.dir)))
 	for _, id := range []string{"canary.caps", "canary.nnp", "canary.seccomp", "canary.uid", "canary.memory", "canary.pids",
-		"canary.cpu", "canary.apparmor", "canary.rootfs", "canary.tmp", "canary.no-route", "canary.no-dns"} {
+		"canary.cpu", "canary.apparmor", "canary.rootfs", "canary.tmp", "canary.mptcp", "canary.no-route", "canary.no-dns"} {
 		if vs[id].Status != Fail {
 			t.Errorf("%s: %s %s, want fail", id, vs[id].Status, vs[id].Detail)
 		}
@@ -262,7 +264,7 @@ func TestEvaluateEachCheck(t *testing.T) {
 			"caps_eff": zeroCaps, "caps_bnd": zeroCaps, "nnp": "1", "seccomp": "2",
 			"uid": "1000 1000 1000 1000", "gid": "1000 1000 1000 1000", "groups": "",
 			"memory_max": "1610612736", "memory_swap_max": "0", "pids_max": "512", "cpu_max": "150000 100000",
-			"apparmor": "docker-default (enforce)", "rootfs": "erofs", "tmp_write": "ok",
+			"apparmor": "docker-default (enforce)", "rootfs": "erofs", "tmp_write": "ok", "mptcp": "0",
 			"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,relatime super=rw,size=524288k,mode=1777",
 			"no_route":  "failed: unreachable", "no_dns": "failed: no such host", "no_host": "failed: refused",
 			"proxy_allow": "status=200", "proxy_deny": "status=403", "owner": "written",
@@ -311,6 +313,9 @@ func TestEvaluateEachCheck(t *testing.T) {
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,noexec,relatime super=rw,size=524288k,inode64"}, want: Fail}, // this dev container's /tmp
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=overlay mount=rw,nosuid,nodev super=rw"}, want: Fail},
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "missing"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "1"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "error: open /proc/sys/net/mptcp/enabled: no such file or directory"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": ""}, want: Fail},
 		{id: "canary.no-route", obs: map[string]string{"no_route": "connected"}, want: Fail},
 		{id: "canary.no-route", host: func(h *Host) { h.RouteControl = errors.New("unreachable") }, want: Fail},
 		{id: "canary.no-dns", obs: map[string]string{"no_dns": "resolved: [1.1.1.1]"}, want: Fail},
