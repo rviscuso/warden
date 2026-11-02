@@ -33,6 +33,7 @@ func (e *env) checksEnv(mode checks.Mode, dirs paths.Dirs, home string) checks.E
 		Mode:        mode,
 		EUID:        e.geteuid(),
 		UID:         e.getuid(),
+		GID:         e.getgid(),
 		Home:        home,
 		Dirs:        dirs,
 		Root:        e.root,
@@ -42,6 +43,13 @@ func (e *env) checksEnv(mode checks.Mode, dirs paths.Dirs, home string) checks.E
 		NewRunner:   e.newRunner,
 		SystemDirs:  e.systemDirs,
 		Ctx:         context.Background(),
+		Canary: checks.CanaryEnv{
+			Executable: e.executable,
+			Resolver:   e.resolver,
+			Dialer:     e.dialer,
+			Listen:     e.canaryListen,
+			Rand:       e.rand,
+		},
 	}
 }
 
@@ -188,7 +196,7 @@ func printReport(w io.Writer, rep *checks.Report, jsonOut bool) {
 const exampleConfig = `{
   "version": 1,
   "docker": { "socket": "/var/run/docker.sock" },
-  "runtime_image": "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "runtime_image": "` + exampleRuntimeImage + `",
   "egress": { "allow": ["api.anthropic.com", "platform.claude.com"] },
   "controller": {
     "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -210,3 +218,6 @@ const exampleExplanation = `An example config is printed on stdout. Fields:
   controller.workspace     absolute path of the repository the agent may change
   controller.remote_control_name   name shown in Claude's Remote Control
   controller.resources     memory_mb 256-65536, cpus 0.25-64, pids 64-32768`
+
+// exampleRuntimeImage is the example config's placeholder runtime_image.
+const exampleRuntimeImage = "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000"

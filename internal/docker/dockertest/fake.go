@@ -18,6 +18,9 @@ type Response struct {
 	Stdout, Stderr string
 	ExitCode       int
 	Err            error
+	// Do, if set, runs when the call is made, with its stdin: a stand-in
+	// for what the real command would do (a container writing a file).
+	Do func(stdin []byte)
 }
 
 // Fake is a docker.Runner that answers from a script keyed by the
@@ -27,6 +30,8 @@ type Fake struct {
 	mu    sync.Mutex
 	resp  map[string]Response
 	Calls [][]string
+	// Stdins holds each call's stdin (nil if none), parallel to Calls.
+	Stdins [][]byte
 }
 
 // New returns an empty Fake bound to t.
@@ -54,11 +59,19 @@ func (f *Fake) OnFile(argv []string, path string) *Fake {
 }
 
 // Run implements docker.Runner.
-func (f *Fake) Run(_ context.Context, args []string, _ io.Reader) ([]byte, []byte, int, error) {
+func (f *Fake) Run(_ context.Context, args []string, stdin io.Reader) ([]byte, []byte, int, error) {
+	var in []byte
+	if stdin != nil {
+		in, _ = io.ReadAll(stdin)
+	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, append([]string(nil), args...))
+	f.Stdins = append(f.Stdins, in)
 	r, ok := f.resp[strings.Join(args, " ")]
+	f.mu.Unlock()
+	if ok && r.Do != nil {
+		r.Do(in)
+	}
 	if !ok {
 		f.t.Errorf("unexpected docker call: docker %s", strings.Join(args, " "))
 		return nil, nil, -1, fmt.Errorf("dockertest: unscripted call")

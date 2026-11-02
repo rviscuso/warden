@@ -5,10 +5,12 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -76,18 +78,25 @@ func TestInitAndCheckOnRealDaemon(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rep); err != nil || code != 0 || !rep.OK {
 		t.Fatalf("check --json: exit %d, ok %v, err %v\n%s", code, rep.OK, err, out)
 	}
-	if last := rep.Checks[len(rep.Checks)-1]; last.ID != "host.shared-mounts" || last.Status != "pass" {
-		t.Fatalf("shared-mounts: %+v", last)
+	found := false
+	for _, c := range rep.Checks {
+		if c.ID == "host.shared-mounts" {
+			found = c.Status == "pass"
+		}
+	}
+	if !found {
+		t.Fatalf("host.shared-mounts didn't pass: %+v", rep.Checks)
 	}
 }
 
 type entry struct {
-	mode  fs.FileMode
-	size  int64
-	mtime time.Time
+	mode     fs.FileMode
+	size     int64
+	uid, gid uint32
+	mtime    time.Time
 }
 
-func snapshot(t *testing.T, root string) map[string]entry {
+func snapshot(t *testing.T, root, canaryDir string) map[string]entry {
 	t.Helper()
 	m := map[string]entry{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -98,7 +107,19 @@ func snapshot(t *testing.T, root string) map[string]entry {
 		if err != nil {
 			return err
 		}
-		m[p] = entry{fi.Mode(), fi.Size(), fi.ModTime()}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("%s: no owner information", p)
+		}
+		e := entry{fi.Mode(), fi.Size(), st.Uid, st.Gid, fi.ModTime()}
+		if p == canaryDir {
+			// The one exception: the canary creates its run directory here and
+			// removes it, which changes this directory's own mtime. Its mode,
+			// size and owner are still compared, and TestCheckIsReadOnly
+			// requires it to be empty afterwards.
+			e.mtime = time.Time{}
+		}
+		m[p] = e
 		return nil
 	})
 	if err != nil {
@@ -110,11 +131,17 @@ func snapshot(t *testing.T, root string) map[string]entry {
 func TestCheckIsReadOnly(t *testing.T) {
 	s := newSandbox(t)
 	s.initialized(t)
-	before := snapshot(t, s.root)
+	before := snapshot(t, s.root, s.canaryDir())
 	if _, _, code := s.warden(t, "", "check"); code != 0 {
 		t.Fatalf("check: exit %d", code)
 	}
-	after := snapshot(t, s.root)
+	after := snapshot(t, s.root, s.canaryDir())
+	if entries, err := os.ReadDir(s.canaryDir()); err != nil || len(entries) != 0 {
+		t.Errorf("%s after check: %v %v, want empty", s.canaryDir(), entries, err)
+	}
+	if _, ok := after[s.canaryDir()]; !ok {
+		t.Errorf("%s is gone after check", s.canaryDir())
+	}
 	for p, e := range after {
 		if b, ok := before[p]; !ok || b != e {
 			t.Errorf("check changed %s", p)

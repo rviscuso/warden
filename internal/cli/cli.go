@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rviscuso/warden/internal/canary"
 	"github.com/rviscuso/warden/internal/docker"
 	"github.com/rviscuso/warden/internal/proxy"
 )
@@ -44,6 +45,7 @@ type env struct {
 	geteuid   func() int
 
 	getuid      func() int
+	getgid      func() int
 	home        func() (string, error)
 	now         func() time.Time
 	root        string // filesystem root for host files
@@ -52,6 +54,12 @@ type env struct {
 	dockerPaths []string
 	newRunner   func(docker.Options) (docker.Runner, error)
 	systemDirs  []string // nil in production: mounts.DefaultSystemDirs
+
+	// the canary (init, check)
+	executable   func() (string, error)
+	canaryListen func(network, address string) (net.Listener, error)
+	rand         io.Reader              // nil: crypto/rand
+	probeEnv     func() canary.ProbeEnv // nil: canary.DefaultProbeEnv
 
 	// warden proxy
 	listen   func(address string) (net.Listener, error)
@@ -72,6 +80,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		geteuid:   os.Geteuid,
 
 		getuid:      os.Getuid,
+		getgid:      os.Getgid,
 		home:        os.UserHomeDir,
 		now:         time.Now,
 		root:        "/",
@@ -86,8 +95,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		signals: func() (context.Context, context.CancelFunc) {
 			return signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 		},
-		resolver: net.DefaultResolver,
-		dialer:   &net.Dialer{},
+		executable:   os.Executable,
+		canaryListen: net.Listen,
+		resolver:     net.DefaultResolver,
+		dialer:       &net.Dialer{},
 	}, args)
 }
 
@@ -178,6 +189,14 @@ func commands() []*command {
 			detail:  "The egress proxy itself. Internal: it runs only inside Warden's proxy container, where WARDEN_ROLE=proxy is set.",
 			hidden:  true,
 			define:  defineProxy,
+		},
+		{
+			name:    "probe",
+			args:    "[flags]",
+			summary: "The canary probe (internal)",
+			detail:  "The canary probe. Internal: it runs only inside Warden's canary container, where WARDEN_ROLE=canary is set, and prints what it observes as key=value lines.",
+			hidden:  true,
+			define:  defineProbe,
 		},
 	}
 }

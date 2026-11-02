@@ -79,7 +79,7 @@ agent always getting it right: the boundary holds either way.
 user ──▶ warden (CLI, runs as the user) ──argv only──▶ docker CLI ──▶ dockerd (rootful)
               │
               ├── ~/.config/warden        config + policy (never mountable)
-              ├── ~/.local/state/warden   state, generated compose, logs (never mountable)
+              ├── ~/.local/state/warden   state, generated compose, logs (never mounted; see phase-1 for the two read-only or canary-only paths under it)
               └── ~/.local/share/warden   agent homes: session state the agent may write
 
    ┌──────────── sandbox network (internal: no route out, no outside DNS) ────────────┐

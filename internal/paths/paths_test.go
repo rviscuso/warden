@@ -31,6 +31,9 @@ func TestResolveDefaults(t *testing.T) {
 		d.StateFile():       "/home/u/.local/state/warden/state.json",
 		d.ComposeDir():      "/home/u/.local/state/warden/compose",
 		d.DockerConfigDir(): "/home/u/.local/state/warden/docker-config",
+		d.BinDir():          "/home/u/.local/state/warden/bin",
+		d.CanaryDir():       "/home/u/.local/state/warden/canary",
+		d.CanaryLock():      "/home/u/.local/state/warden/canary.lock",
 		d.AgentsDir():       "/home/u/.local/share/warden/agents",
 	} {
 		if got != want {

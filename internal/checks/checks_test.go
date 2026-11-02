@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rviscuso/warden/internal/checks/checkstest"
 	"github.com/rviscuso/warden/internal/docker"
 	"github.com/rviscuso/warden/internal/docker/dockertest"
 	"github.com/rviscuso/warden/internal/paths"
@@ -36,6 +37,7 @@ type harness struct {
 	fake       *dockertest.Fake
 	env        Env
 	runnerOpts []docker.Options
+	cn         *checkstest.Canary
 }
 
 func newHarness(t *testing.T) *harness {
@@ -56,6 +58,7 @@ func newHarness(t *testing.T) *harness {
 		}
 	}
 	h.write("hostfs/sys/fs/cgroup/cgroup.controllers", "cpu memory pids\n", 0o644)
+	os.MkdirAll(filepath.Join(root, "hostfs/proc/sys/net/mptcp"), 0o755) // a kernel with MPTCP
 	h.write("bin/docker", "", 0o755)
 
 	h.sock = filepath.Join(root, "d.sock")
@@ -89,6 +92,7 @@ func newHarness(t *testing.T) *harness {
 	h.fake.OnFile(argsInfo, "testdata/docker-info-rootful.json")
 	h.fake.OnFile(argsVersion, "testdata/docker-version.json")
 	h.fake.On(argsPS, dockertest.Response{})
+	h.setupCanary()
 	return h
 }
 
@@ -176,6 +180,9 @@ func TestAllPassInit(t *testing.T) {
 	want := []string{"config.valid", "workspace.valid", "host.not-root", "host.os", "host.cgroup2",
 		"host.docker-cli", "host.docker-access", "host.compose", "daemon.reachable", "daemon.mode",
 		"daemon.cgroup", "daemon.seccomp", "daemon.apparmor", "daemon.version", "host.shared-mounts"}
+	for _, c := range canaryIDs() {
+		want = append(want, c.ID)
+	}
 	if !slices.Equal(ids(rep), want) {
 		t.Fatalf("checks %v\nwant %v", ids(rep), want)
 	}
@@ -209,6 +216,7 @@ func pin(t *testing.T, h *harness, id, sock string) {
 
 func TestCheckModePin(t *testing.T) {
 	h := newHarness(t)
+	h.run() // init first: check needs the canary state it creates
 	h.env.Mode = ModeCheck
 
 	rep := h.run()
