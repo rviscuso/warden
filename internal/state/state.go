@@ -43,6 +43,9 @@ type Controller struct {
 	ControllerID     string     `json:"controller_id,omitempty"`
 	RemoteControlURL string     `json:"remote_control_url,omitempty"`
 	URLFoundAt       *time.Time `json:"url_found_at,omitempty"`
+	// Incident is the evidence file of a failed post-start verification: the
+	// containers were stopped and kept. up refuses until down clears it.
+	Incident string `json:"incident,omitempty"`
 }
 
 var (
@@ -66,6 +69,8 @@ func (c *Controller) Validate() error {
 		return fmt.Errorf("state: controller.remote_control_url %q is not a Remote Control URL", c.RemoteControlURL)
 	case (c.RemoteControlURL == "") != (c.URLFoundAt == nil):
 		return errors.New("state: controller: remote_control_url and url_found_at must be set together")
+	case c.Incident != "" && !filepath.IsAbs(c.Incident):
+		return fmt.Errorf("state: controller.incident %q is not an absolute path", c.Incident)
 	}
 	return nil
 }

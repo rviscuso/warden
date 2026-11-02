@@ -226,6 +226,10 @@ func Up(env Env) error {
 	if err != nil {
 		return err
 	}
+	if c := s.st.Controller; c != nil && c.Incident != "" {
+		return fail("inspect the stopped containers (docker inspect warden-proxy warden-controller) and "+c.Incident+", then run warden down",
+			"a post-start verification failed; its stopped containers are kept as evidence")
+	}
 	env, cfg := s.env, s.cfg
 	ws, err := mounts.ValidateWorkspace(cfg.Controller.Workspace, mounts.Policy{
 		UID: env.UID, Home: env.Home, WardenDirs: []string{env.Dirs.Config, env.Dirs.State, env.Dirs.Share},
@@ -314,16 +318,7 @@ func Up(env Env) error {
 
 	for _, name := range []string{ProxyName, ControllerName} {
 		if verr := s.verify(name); verr != nil {
-			fmt.Fprintf(env.Stderr, "%v\nStopping everything.\n", verr)
-			_, derr := s.docker(ctx, "compose", "-p", ProjectName, "-f", file, "down")
-			c.ProxyID, c.ControllerID = "", ""
-			if err := s.save(); err != nil {
-				return err
-			}
-			if derr != nil {
-				return fail("remove them yourself: docker compose -p warden down", "%v; and stopping failed: %v", verr, derr)
-			}
-			return verr
+			return s.incident(ctx, file, verr)
 		}
 	}
 	fmt.Fprintln(env.Stdout, "Verified warden-proxy and warden-controller: your UID and GID, no capabilities, no new privileges.")
@@ -497,6 +492,7 @@ func Down(env Env) error {
 	}
 	if c := s.st.Controller; c != nil {
 		c.ProxyID, c.ControllerID = "", ""
+		c.Incident = ""
 		if err := s.save(); err != nil {
 			return err
 		}
@@ -524,6 +520,7 @@ type StatusReport struct {
 	Containers []ContainerStatus `json:"containers"`
 	URL        string            `json:"remote_control_url,omitempty"`
 	URLFoundAt *time.Time        `json:"url_found_at,omitempty"`
+	Incident   string            `json:"incident,omitempty"` // evidence of a failed verification
 }
 
 // Status reports the pin, both containers and the last URL.
@@ -537,6 +534,7 @@ func Status(env Env, jsonOut bool) error {
 	c := s.st.Controller
 	if c != nil {
 		rep.URL, rep.URLFoundAt = c.RemoteControlURL, c.URLFoundAt
+		rep.Incident = c.Incident
 	}
 	for _, name := range []string{ProxyName, ControllerName} {
 		cs, err := s.inspect(name)
@@ -585,6 +583,9 @@ func Status(env Env, jsonOut bool) error {
 			who = "NOT started by Warden: its ID isn't the one up recorded"
 		}
 		fmt.Fprintf(env.Stdout, "%s: %s, started %s, image %s, ID %s (%s)\n", cs.Name, cs.State, cs.StartedAt, cs.Image, cs.ID[:12], who)
+	}
+	if rep.Incident != "" {
+		fmt.Fprintf(env.Stdout, "\nIncident: a post-start verification failed; the stopped containers are kept. Evidence: %s\nInspect them, then run warden down.\n", rep.Incident)
 	}
 	if rep.URL != "" {
 		fmt.Fprintf(env.Stdout, "\nLast Remote Control URL: %s (found %s)\n", rep.URL, rep.URLFoundAt.Format(time.RFC3339))
@@ -637,4 +638,55 @@ func Logs(env Env, which string, n int) error {
 		return fail("", "docker logs %s exited %d", name, code)
 	}
 	return nil
+}
+
+// incident handles a failed post-start verification, a security event:
+// stop both containers at once (the agent stops running), keep them, save
+// docker inspect of both as evidence, record the incident so up refuses
+// until down, and report.
+func (s *session) incident(ctx context.Context, file string, verr error) error {
+	env, c := s.env, s.st.Controller
+	fmt.Fprintf(env.Stderr, "%v\nStopping both containers now; they are kept for inspection.\n", verr)
+	_, stopErr := s.docker(ctx, "compose", "-p", ProjectName, "-f", file, "stop", "-t", "0")
+
+	now := env.Now().UTC()
+	evidence := struct {
+		Time       time.Time       `json:"time"`
+		Problem    string          `json:"problem"`
+		StopError  string          `json:"stop_error,omitempty"`
+		Inspect    json.RawMessage `json:"inspect,omitempty"`
+		InspectErr string          `json:"inspect_error,omitempty"`
+	}{Time: now, Problem: verr.Error()}
+	if stopErr != nil {
+		evidence.StopError = stopErr.Error()
+	}
+	if out, err := s.docker(ctx, "inspect", "--type", "container", ProxyName, ControllerName); err != nil {
+		evidence.InspectErr = err.Error()
+	} else if json.Valid(out) {
+		evidence.Inspect = out
+	} else {
+		evidence.InspectErr = "docker inspect printed invalid JSON"
+	}
+	if err := ensurePrivateDir(env.Dirs.IncidentsDir(), env.UID); err != nil {
+		return fmt.Errorf("%v; and the evidence couldn't be saved: %w", verr, err)
+	}
+	path := filepath.Join(env.Dirs.IncidentsDir(), now.Format("20060102T150405.000000000Z")+".json")
+	data, err := json.MarshalIndent(evidence, "", "  ")
+	if err == nil {
+		err = writeAtomic(path, append(data, '\n'))
+	}
+	if err != nil {
+		return fmt.Errorf("%v; and the evidence couldn't be saved: %w", verr, err)
+	}
+	c.Incident = path
+	if err := s.save(); err != nil {
+		return err
+	}
+	fmt.Fprintf(env.Stderr, "Evidence: %s\n", path)
+	if stopErr != nil {
+		return fail("stop them yourself: docker compose -p warden stop -t 0; then inspect them and "+path+", then run warden down",
+			"%v; and stopping failed: %v", verr, stopErr)
+	}
+	return fail("inspect the stopped containers (docker inspect warden-proxy warden-controller) and "+path+", then run warden down",
+		"%v", verr)
 }

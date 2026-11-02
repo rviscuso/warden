@@ -52,6 +52,9 @@ func (d Dirs) StateFile() string { return filepath.Join(d.State, "state.json") }
 // ComposeDir holds generated compose files.
 func (d Dirs) ComposeDir() string { return filepath.Join(d.State, "compose") }
 
+// IncidentsDir holds the evidence of failed post-start verifications.
+func (d Dirs) IncidentsDir() string { return filepath.Join(d.State, "incidents") }
+
 // DockerConfigDir is the empty DOCKER_CONFIG Warden passes to the docker CLI.
 func (d Dirs) DockerConfigDir() string { return filepath.Join(d.State, "docker-config") }
 

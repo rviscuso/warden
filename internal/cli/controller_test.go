@@ -56,6 +56,9 @@ func (h *host) scriptUp(log string) {
 	f := h.composeFile()
 	h.fake.On([]string{"compose", "-p", "warden", "-f", f, "up", "-d"}, dockertest.Response{})
 	h.fake.On([]string{"compose", "-p", "warden", "-f", f, "down"}, dockertest.Response{})
+	h.fake.On([]string{"compose", "-p", "warden", "-f", f, "stop", "-t", "0"}, dockertest.Response{})
+	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy", "warden-controller"},
+		dockertest.Response{Stdout: "[" + inspectJSON(proxyID, "exited", "x")[1:len(inspectJSON(proxyID, "exited", "x"))-1] + "," + inspectJSON(controllerID, "exited", "x")[1:len(inspectJSON(controllerID, "exited", "x"))-1] + "]"})
 	h.fake.On([]string{"compose", "-p", "warden", "down"}, dockertest.Response{})
 	h.fake.On([]string{"inspect", "--type", "container", "--format", "{{.Id}}", "warden-proxy", "warden-controller"},
 		dockertest.Response{Stdout: proxyID + "\n" + controllerID + "\n"})
@@ -168,22 +171,67 @@ func countCalls(h *host, args ...string) int {
 	return n
 }
 
-func TestUpVerificationFailureStopsEverything(t *testing.T) {
+func TestUpVerificationFailureKeepsEvidence(t *testing.T) {
 	h := upHost(t)
 	h.proc(701, 700, "claude", os.Getuid(), os.Getgid(), "00000000a80425fb")
 	r := h.run("up")
 	if r.code != ExitFail || !strings.Contains(r.stderr, "post-start verification failed for warden-controller") ||
-		!strings.Contains(r.stderr, "CapEff 00000000a80425fb") || !strings.Contains(r.stderr, "Stopping everything.") {
+		!strings.Contains(r.stderr, "CapEff 00000000a80425fb") || !strings.Contains(r.stderr, "they are kept for inspection") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
-	if !h.called("compose", "-p", "warden", "-f", h.composeFile(), "down") {
-		t.Error("compose down didn't run")
+	if !h.called("compose", "-p", "warden", "-f", h.composeFile(), "stop", "-t", "0") {
+		t.Error("the containers weren't stopped at once")
 	}
-	if c := h.loadState().Controller; c == nil || c.Running() {
-		t.Errorf("state after a failed verification: %+v", c)
+	for _, c := range h.fake.Calls {
+		if strings.Join(c, " ") == strings.Join([]string{"compose", "-p", "warden", "-f", h.composeFile(), "down"}, " ") {
+			t.Error("the evidence was removed")
+		}
+	}
+	c := h.loadState().Controller
+	if c == nil || !c.Running() || c.Incident == "" {
+		t.Fatalf("state after a failed verification: %+v", c)
+	}
+	if filepath.Dir(c.Incident) != filepath.Join(h.stateDir(), "incidents") || !strings.Contains(r.stderr, "Evidence: "+c.Incident) ||
+		!strings.Contains(r.stderr, "fix: inspect the stopped containers") {
+		t.Errorf("incident %s\n%s", c.Incident, r.stderr)
+	}
+	fi, err := os.Stat(c.Incident)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("incident file: %v %v", fi, err)
+	}
+	if d, _ := os.Stat(filepath.Dir(c.Incident)); d.Mode().Perm() != 0o700 {
+		t.Errorf("incidents dir mode %v", d.Mode())
+	}
+	var ev struct {
+		Problem string
+		Inspect json.RawMessage
+	}
+	data, _ := os.ReadFile(c.Incident)
+	if err := json.Unmarshal(data, &ev); err != nil || !strings.Contains(ev.Problem, "CapEff 00000000a80425fb") || !strings.Contains(string(ev.Inspect), controllerID) {
+		t.Fatalf("evidence %v:\n%s", err, data)
 	}
 	if strings.Contains(r.stdout, "Remote Control:") {
 		t.Error("printed a URL after failing verification")
+	}
+
+	// up refuses until down; status shows the incident; down clears it.
+	r = h.run("up")
+	if r.code != ExitFail || !strings.Contains(r.stderr, "a post-start verification failed") || strings.Contains(r.stderr, "Apply?") {
+		t.Fatalf("second up: %d\n%s", r.code, r.stderr)
+	}
+	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "exited", exampleRuntimeImage)})
+	h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: inspectJSON(controllerID, "exited", "sha256:x")})
+	if r := h.run("status"); !strings.Contains(r.stdout, "Incident: a post-start verification failed") {
+		t.Errorf("status:\n%s", r.stdout)
+	}
+	if r := h.run("down"); r.code != ExitOK {
+		t.Fatal(r.stderr)
+	}
+	if c := h.loadState().Controller; c.Incident != "" || c.Running() {
+		t.Errorf("after down: %+v", c)
+	}
+	if _, err := os.Stat(c.Incident); err != nil {
+		t.Error("down removed the evidence file")
 	}
 }
 
@@ -439,5 +487,20 @@ func TestStatusLooksOnlyAtWardensRunningController(t *testing.T) {
 		if r := h.run("status"); r.code != ExitOK || countCalls(h, logsArgs...) != before {
 			t.Errorf("%s: code %d, log read %d times", name, r.code, countCalls(h, logsArgs...)-before)
 		}
+	}
+}
+
+// TestUpIncidentStopFails: if stopping fails, the incident is still
+// recorded and the fix says to stop them by hand.
+func TestUpIncidentStopFails(t *testing.T) {
+	h := upHost(t)
+	h.proc(701, 700, "claude", os.Getuid(), os.Getgid(), "00000000a80425fb")
+	h.fake.On([]string{"compose", "-p", "warden", "-f", h.composeFile(), "stop", "-t", "0"}, dockertest.Response{ExitCode: 1, Stderr: "daemon busy"})
+	r := h.run("up")
+	if r.code != ExitFail || !strings.Contains(r.stderr, "stopping failed") || !strings.Contains(r.stderr, "fix: stop them yourself: docker compose -p warden stop -t 0") {
+		t.Fatalf("%d\n%s", r.code, r.stderr)
+	}
+	if c := h.loadState().Controller; c.Incident == "" {
+		t.Fatal("incident not recorded")
 	}
 }
