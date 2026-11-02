@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
+	"os"
+	"path/filepath"
 )
 
 // Resources are a container's limits.
@@ -43,18 +46,23 @@ type Fields struct {
 	Init         bool     `json:"init"`
 	// Explicit, so daemon defaults (default-ipc-mode, default-cgroupns-mode)
 	// can't weaken them.
-	IPC        string  `json:"ipc"`
-	Cgroup     string  `json:"cgroup"`
-	Sysctls    Sysctls `json:"sysctls"`
-	Restart    string  `json:"restart"`
-	PullPolicy string  `json:"pull_policy"`
+	IPC        string   `json:"ipc"`
+	Cgroup     string   `json:"cgroup"`
+	Sysctls    *Sysctls `json:"sysctls,omitempty"` // nil on a host without MPTCP
+	Restart    string   `json:"restart"`
+	PullPolicy string   `json:"pull_policy"`
+}
+
+// Host is what the hardening depends on about the host.
+type Host struct {
+	MPTCP bool // the kernel has MPTCP: see HostMPTCP
 }
 
 // Settings returns the hardened fields for a container running as
-// uid:gid with limits r. Seccomp and AppArmor stay at Docker's defaults
+// uid:gid with limits r on host h. Seccomp and AppArmor stay at Docker's defaults
 // (naming AppArmor would stop containers starting on hosts without it);
 // the canary verifies both.
-func Settings(uid, gid int, r Resources) (Fields, error) {
+func Settings(uid, gid int, r Resources, h Host) (Fields, error) {
 	if uid <= 0 || gid <= 0 {
 		return Fields{}, fmt.Errorf("hardening: refusing uid %d gid %d: containers never run as root or the root group", uid, gid)
 	}
@@ -62,6 +70,10 @@ func Settings(uid, gid int, r Resources) (Fields, error) {
 		return Fields{}, err
 	}
 	mem := MemoryBytes(r)
+	var sysctls *Sysctls
+	if h.MPTCP {
+		sysctls = &Sysctls{}
+	}
 	return Fields{
 		User:         fmt.Sprintf("%d:%d", uid, gid),
 		CapDrop:      []string{"ALL"},
@@ -75,6 +87,7 @@ func Settings(uid, gid int, r Resources) (Fields, error) {
 		Init:         true,
 		IPC:          "private",
 		Cgroup:       "private",
+		Sysctls:      sysctls,
 		Restart:      "no",
 		PullPolicy:   "never",
 	}, nil
@@ -99,14 +112,32 @@ func MemoryBytes(r Resources) int64 { return int64(r.MemoryMB) << 20 }
 // "<quota> 100000".
 const CPUPeriod = 100000
 
-// Sysctls are every container's kernel parameters: MPTCP off, a separate
-// protocol stack the agent has no use for. The sysctl is per network
-// namespace, so each container gets it whatever the host has. The type has
-// no fields, so it can't express any other sysctl; it always marshals to
-// SysctlValues.
+// Sysctls are a container's kernel parameters on a host with MPTCP: MPTCP
+// off, a separate protocol stack the agent has no use for. The sysctl is
+// per network namespace, so each container gets it whatever the host has.
+// The type has no fields, so it can't express any other sysctl; it always
+// marshals to SysctlValues. On a host without MPTCP there is nothing to
+// turn off, and Fields.Sysctls is nil.
 type Sysctls struct{}
 
 // SysctlValues is the map Sysctls marshals to, fresh on each call.
 func SysctlValues() map[string]string { return map[string]string{"net.mptcp.enabled": "0"} }
 
 func (Sysctls) MarshalJSON() ([]byte, error) { return json.Marshal(SysctlValues()) }
+
+// HostMPTCP reports whether the kernel under root has MPTCP: whether
+// <root>/proc/sys/net/mptcp is a directory. CONFIG_MPTCP is built in, never
+// a module, so a missing directory means no MPTCP at all. Any other error
+// is returned: the caller fails closed.
+func HostMPTCP(root string) (bool, error) {
+	fi, err := os.Stat(filepath.Join(root, "proc", "sys", "net", "mptcp"))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("hardening: cannot tell whether the kernel has MPTCP: %w", err)
+	case !fi.IsDir():
+		return false, fmt.Errorf("hardening: %s is not a directory", filepath.Join(root, "proc", "sys", "net", "mptcp"))
+	}
+	return true, nil
+}

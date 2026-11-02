@@ -62,6 +62,7 @@ func newHost(t *testing.T) *host {
 		os.MkdirAll(d, 0o700)
 	}
 	os.WriteFile(filepath.Join(root, "hostfs/sys/fs/cgroup/cgroup.controllers"), []byte("cpu\n"), 0o644)
+	os.MkdirAll(filepath.Join(root, "hostfs/proc/sys/net/mptcp"), 0o755) // a kernel with MPTCP
 	os.WriteFile(filepath.Join(root, "bin/docker"), nil, 0o755)
 	h.sock = filepath.Join(root, "d.sock")
 	l, err := net.Listen("unix", h.sock)

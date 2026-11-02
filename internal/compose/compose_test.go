@@ -15,11 +15,11 @@ const (
 	sock      = "/var/run/docker.sock"
 )
 
-var pol = Policy{UID: 1000, GID: 1000, Socket: sock}
+var pol = Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: true}
 
 func validFile(t *testing.T) File {
 	t.Helper()
-	h, err := hardening.Settings(1000, 1000, hardening.ProxyResources)
+	h, err := hardening.Settings(1000, 1000, hardening.ProxyResources, hardening.Host{MPTCP: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRenderRefusesSocketMounts(t *testing.T) {
 	linkDir := filepath.Join(dir, "rundir")
 	os.Symlink("/var/run", linkDir)
 
-	p := Policy{UID: 1000, GID: 1000, Socket: custom}
+	p := Policy{UID: 1000, GID: 1000, Socket: custom, MPTCP: true}
 	for _, src := range []string{custom, dir, link, "/var/run/docker.sock", "/run", linkDir} {
 		f := validFile(t)
 		s := f.Services["proxy"]
@@ -217,7 +217,7 @@ func TestValidateRefusesRootPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []Policy{{0, 1000, sock}, {1000, 0, sock}} {
+	for _, p := range []Policy{{0, 1000, sock, true}, {1000, 0, sock, true}} {
 		if err := Validate(b, p); err == nil {
 			t.Errorf("policy %+v accepted", p)
 		}
@@ -228,5 +228,46 @@ func TestValidateRefusesTrailingData(t *testing.T) {
 	b, _ := Render(validFile(t), pol)
 	if err := Validate(append(b, []byte(`{}`)...), pol); err == nil {
 		t.Fatal("trailing data accepted")
+	}
+}
+
+// TestNoMPTCPHost: on a kernel without MPTCP the file has no sysctls, and
+// Validate requires exactly that; each policy refuses the other's form.
+func TestNoMPTCPHost(t *testing.T) {
+	noMPTCP := Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: false}
+	f := validFile(t)
+	for k, s := range f.Services {
+		s.Sysctls = nil
+		f.Services[k] = s
+	}
+	b, err := Render(f, noMPTCP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "sysctls") {
+		t.Fatalf("rendered sysctls:\n%s", b)
+	}
+	if err := Validate(b, pol); err == nil {
+		t.Error("an MPTCP host accepted a file without the sysctl")
+	}
+	withSysctl, err := Render(validFile(t), pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(withSysctl, noMPTCP); err == nil {
+		t.Error("a host without MPTCP accepted sysctls")
+	}
+	for name, v := range map[string]any{
+		"mptcp off":    map[string]any{"net.mptcp.enabled": "0"},
+		"other sysctl": map[string]any{"net.ipv4.ip_forward": "1"},
+		"empty":        map[string]any{},
+	} {
+		var top map[string]any
+		json.Unmarshal(b, &top)
+		top["services"].(map[string]any)["proxy"].(map[string]any)["sysctls"] = v
+		out, _ := json.Marshal(top)
+		if err := Validate(out, noMPTCP); err == nil {
+			t.Errorf("%s: accepted on a host without MPTCP", name)
+		}
 	}
 }

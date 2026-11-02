@@ -34,7 +34,7 @@ const (
 var Keys = []string{
 	"caps_eff", "caps_bnd", "nnp", "seccomp", "uid", "gid", "groups",
 	"memory_max", "memory_swap_max", "pids_max", "cpu_max", "apparmor",
-	"rootfs", "tmp_write", "tmp_mount", "mptcp",
+	"rootfs", "tmp_write", "tmp_mount", "mptcp", "mptcp_socket",
 	"no_route", "no_dns", "no_host", "proxy_allow", "proxy_deny", "owner",
 }
 
@@ -58,6 +58,8 @@ type ProbeEnv struct {
 	Dialer interface {
 		DialContext(ctx context.Context, network, address string) (net.Conn, error)
 	}
+	// MPTCPSocket opens and closes an MPTCP socket, returning the error.
+	MPTCPSocket                         func() error
 	ControlWait, ProxyWait, StepTimeout time.Duration
 }
 
@@ -68,6 +70,7 @@ func DefaultProbeEnv() ProbeEnv {
 		WriteFile:   func(name string, data []byte) error { return os.WriteFile(name, data, 0o600) },
 		Resolver:    net.DefaultResolver,
 		Dialer:      &net.Dialer{},
+		MPTCPSocket: mptcpSocket,
 		ControlWait: ControlWait, ProxyWait: ProxyWait, StepTimeout: StepTimeout,
 	}
 }
@@ -111,6 +114,10 @@ func Probe(ctx context.Context, o ProbeOptions, env ProbeEnv, w io.Writer) error
 		obs[key] = readValue(p(file))
 	}
 
+	obs["mptcp_socket"] = "error: no socket function"
+	if env.MPTCPSocket != nil {
+		obs["mptcp_socket"] = socketResult(env.MPTCPSocket())
+	}
 	obs["rootfs"] = writeResult(env, p("warden-canary-rootfs"))
 	switch err := env.WriteFile(p("tmp/warden-canary-tmp"), []byte("canary")); {
 	case err == nil:
@@ -320,4 +327,32 @@ func clean(s string) string {
 		s = s[:300]
 	}
 	return s
+}
+
+// ipprotoMPTCP is Linux's protocol number for MPTCP (IPPROTO_MPTCP in
+// include/uapi/linux/in.h).
+const ipprotoMPTCP = 262
+
+// mptcpSocket tries to open an MPTCP socket: what MPTCP being off means in
+// practice, whatever any setting says.
+func mptcpSocket() error {
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, ipprotoMPTCP)
+	if err == nil {
+		syscall.Close(fd)
+	}
+	return err
+}
+
+// socketResult names the outcome: ENOPROTOOPT is MPTCP turned off
+// (net.mptcp.enabled=0), EPROTONOSUPPORT a kernel without MPTCP.
+func socketResult(err error) string {
+	switch {
+	case err == nil:
+		return "opened"
+	case errors.Is(err, syscall.ENOPROTOOPT):
+		return "enoprotoopt"
+	case errors.Is(err, syscall.EPROTONOSUPPORT):
+		return "eprotonosupport"
+	}
+	return "error: " + err.Error()
 }

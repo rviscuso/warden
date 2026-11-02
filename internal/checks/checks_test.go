@@ -58,6 +58,7 @@ func newHarness(t *testing.T) *harness {
 		}
 	}
 	h.write("hostfs/sys/fs/cgroup/cgroup.controllers", "cpu memory pids\n", 0o644)
+	os.MkdirAll(filepath.Join(root, "hostfs/proc/sys/net/mptcp"), 0o755) // a kernel with MPTCP
 	h.write("bin/docker", "", 0o755)
 
 	h.sock = filepath.Join(root, "d.sock")

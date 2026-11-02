@@ -577,7 +577,7 @@ on the host with Docker access, which is root-equivalent.
   check afterwards that no canary container, network or directory is left. A **negative control**
   runs `warden probe` in a deliberately unhardened `docker run` (no `--cap-drop`, no
   `no-new-privileges`, writable root, no `sysctls`, as another non-root UID and GID) and requires
-  `canary.caps`, `canary.nnp`, `canary.rootfs`, `canary.uid` and `canary.mptcp` to fail, so the canary is shown not to pass vacuously. These tests
+  `canary.caps`, `canary.nnp`, `canary.rootfs`, `canary.uid` and, on a host with MPTCP, `canary.mptcp` to fail, so the canary is shown not to pass vacuously. These tests
   extend the exception above to their networks and containers, under the same rules: `warden-e2e-`
   or canary names, always removed, never pulled, SKIP if the image isn.t local.
 

@@ -226,14 +226,19 @@ func (c *canaryRun) run() ([]canary.Verdict, error) {
 	}
 	res := cfg.Controller.Resources
 	resources := hardening.Resources{MemoryMB: res.MemoryMB, CPUs: res.CPUs, Pids: res.PIDs}
+	mptcp, err := hardening.HostMPTCP(r.env.Root)
+	if err != nil {
+		return nil, err
+	}
+	hostH := hardening.Host{MPTCP: mptcp}
 	f, err := canary.Project(canary.ProjectParams{
 		UID: r.env.UID, GID: r.env.GID, RuntimeImage: cfg.RuntimeImage, Binary: bin, MountDir: mnt,
-		Allow: cfg.Egress.Allow, Resources: resources,
+		Allow: cfg.Egress.Allow, Resources: resources, Host: hostH,
 	})
 	if err != nil {
 		return nil, err
 	}
-	c.file, err = compose.Render(f, compose.Policy{UID: r.env.UID, GID: r.env.GID, Socket: cfg.Docker.Socket})
+	c.file, err = compose.Render(f, compose.Policy{UID: r.env.UID, GID: r.env.GID, Socket: cfg.Docker.Socket, MPTCP: mptcp})
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +300,7 @@ func (c *canaryRun) run() ([]canary.Verdict, error) {
 		return nil, err
 	}
 	return canary.Evaluate(obs, canary.Expect{
-		UID: r.env.UID, GID: r.env.GID, Resources: resources, DaemonAppArmor: r.info.securityOption("apparmor"),
+		UID: r.env.UID, GID: r.env.GID, Resources: resources, DaemonAppArmor: r.info.securityOption("apparmor"), MPTCP: mptcp,
 	}, host), nil
 }
 

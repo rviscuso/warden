@@ -121,6 +121,7 @@ func newProbe(t *testing.T, root string) *probeRun {
 			return os.WriteFile(name, data, 0o600)
 		},
 		Resolver: n, Dialer: n,
+		MPTCPSocket: func() error { return syscall.ENOPROTOOPT }, // MPTCP turned off
 		ControlWait: 2 * time.Second, ProxyWait: 2 * time.Second, StepTimeout: time.Second,
 	}
 	return &probeRun{root: root, dir: dir, env: env, net: n, opts: ProbeOptions{
@@ -158,7 +159,7 @@ func goodHost(dir string) Host {
 	return Host{DNSHost: "api.anthropic.com", NoHostAddr: "172.30.0.1:40000", OwnerUID: 1000, OwnerGID: 1000, ProxyLog: []byte(proxyLog)}
 }
 
-var expect = Expect{UID: 1000, GID: 1000, Resources: res, DaemonAppArmor: true}
+var expect = Expect{UID: 1000, GID: 1000, Resources: res, DaemonAppArmor: true, MPTCP: true}
 
 func verdicts(vs []Verdict) map[string]Verdict {
 	m := map[string]Verdict{}
@@ -200,6 +201,7 @@ func TestProbeUnhardened(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "proc/self/mountinfo"), []byte("600 500 0:60 / / rw,relatime - overlay overlay rw\n"), 0o644)
 	p := newProbe(t, root)
 	p.env.WriteFile = func(name string, data []byte) error { return os.WriteFile(name, data, 0o600) } // a writable root
+	p.env.MPTCPSocket = func() error { return nil }                                                   // MPTCP works
 	p.net.addrs[RouteControl] = fakeProxy(t, "x")                                                     // a route out
 	p.net.dns["api.anthropic.com"] = []netip.Addr{netip.MustParseAddr("1.1.1.1")}                     // outside DNS
 	p.control(t, "no_host=skip\n")
@@ -264,7 +266,7 @@ func TestEvaluateEachCheck(t *testing.T) {
 			"caps_eff": zeroCaps, "caps_bnd": zeroCaps, "nnp": "1", "seccomp": "2",
 			"uid": "1000 1000 1000 1000", "gid": "1000 1000 1000 1000", "groups": "",
 			"memory_max": "1610612736", "memory_swap_max": "0", "pids_max": "512", "cpu_max": "150000 100000",
-			"apparmor": "docker-default (enforce)", "rootfs": "erofs", "tmp_write": "ok", "mptcp": "0",
+			"apparmor": "docker-default (enforce)", "rootfs": "erofs", "tmp_write": "ok", "mptcp": "0", "mptcp_socket": "enoprotoopt",
 			"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,relatime super=rw,size=524288k,mode=1777",
 			"no_route":  "failed: unreachable", "no_dns": "failed: no such host", "no_host": "failed: refused",
 			"proxy_allow": "status=200", "proxy_deny": "status=403", "owner": "written",
@@ -319,9 +321,20 @@ func TestEvaluateEachCheck(t *testing.T) {
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,noexec,relatime super=rw,size=524288k,inode64"}, want: Fail}, // this dev container's /tmp
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=overlay mount=rw,nosuid,nodev super=rw"}, want: Fail},
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "missing"}, want: Fail},
+		// A host with MPTCP: the sysctl must be 0 and the socket refused as off.
 		{id: "canary.mptcp", obs: map[string]string{"mptcp": "1"}, want: Fail},
-		{id: "canary.mptcp", obs: map[string]string{"mptcp": "error: open /proc/sys/net/mptcp/enabled: no such file or directory"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "1", "mptcp_socket": "opened"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp_socket": "opened"}, want: Fail}, // the setting says off, the kernel disagrees
+		{id: "canary.mptcp", obs: map[string]string{"mptcp_socket": "eprotonosupport"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp_socket": "error: operation not permitted"}, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "absent", "mptcp_socket": "eprotonosupport"}, want: Fail}, // host and container disagree
 		{id: "canary.mptcp", obs: map[string]string{"mptcp": ""}, want: Fail},
+		// A host without MPTCP: no sysctl, and the kernel has no MPTCP at all.
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "absent", "mptcp_socket": "eprotonosupport"}, exp: noMPTCP, want: Pass},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "absent", "mptcp_socket": "opened"}, exp: noMPTCP, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "absent", "mptcp_socket": "enoprotoopt"}, exp: noMPTCP, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "0", "mptcp_socket": "enoprotoopt"}, exp: noMPTCP, want: Fail}, // disagree
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "error: permission denied", "mptcp_socket": "eprotonosupport"}, exp: noMPTCP, want: Fail},
 		{id: "canary.no-route", obs: map[string]string{"no_route": "connected"}, want: Fail},
 		{id: "canary.no-route", host: func(h *Host) { h.RouteControl = errors.New("unreachable") }, want: Fail},
 		{id: "canary.no-dns", obs: map[string]string{"no_dns": "resolved: [1.1.1.1]"}, want: Fail},
@@ -477,5 +490,43 @@ func TestProbeNoSwapAccounting(t *testing.T) {
 	p.control(t, "no_host=skip\n")
 	if obs := p.run(t); obs["memory_swap_max"] != "absent" {
 		t.Fatalf("memory_swap_max = %q", obs["memory_swap_max"])
+	}
+}
+
+func noMPTCP(e *Expect) { e.MPTCP = false }
+
+func TestSocketResult(t *testing.T) {
+	for err, want := range map[error]string{
+		nil:                     "opened",
+		syscall.ENOPROTOOPT:     "enoprotoopt",
+		syscall.EPROTONOSUPPORT: "eprotonosupport",
+		syscall.EPERM:           "error: operation not permitted",
+		fmt.Errorf("socket: %w", syscall.ENOPROTOOPT): "enoprotoopt",
+	} {
+		if got := socketResult(err); got != want {
+			t.Errorf("%v: %q, want %q", err, got, want)
+		}
+	}
+}
+
+// TestProbeNoSocketFunction: a probe environment without the socket
+// function reports an error, which fails canary.mptcp.
+func TestProbeNoSocketFunction(t *testing.T) {
+	p := newProbe(t, hardenedRoot(t))
+	p.env.MPTCPSocket = nil
+	p.control(t, "no_host=skip\n")
+	obs := p.run(t)
+	if v := verdicts(Evaluate(obs, expect, goodHost(p.dir)))["canary.mptcp"]; v.Status != Fail {
+		t.Fatalf("%+v", v)
+	}
+}
+
+// TestProbeRealMPTCPSocket runs the real socket call where the tests run:
+// whatever this kernel says, the result is one the evaluation knows.
+func TestProbeRealMPTCPSocket(t *testing.T) {
+	got := socketResult(mptcpSocket())
+	t.Logf("MPTCP socket here: %s", got)
+	if got != "opened" && got != "enoprotoopt" && got != "eprotonosupport" && !strings.HasPrefix(got, "error: ") {
+		t.Fatalf("unexpected %q", got)
 	}
 }

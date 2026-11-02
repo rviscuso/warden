@@ -67,7 +67,7 @@ func TestCanaryAllPass(t *testing.T) {
 	if len(files) != 3 || string(files[0]) != string(files[1]) || string(files[1]) != string(files[2]) {
 		t.Fatalf("compose stdin: %d files", len(files))
 	}
-	if err := compose.Validate(files[0], compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock}); err != nil {
+	if err := compose.Validate(files[0], compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock, MPTCP: true}); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(h.env.Dirs.BinDir(), "warden-")
@@ -356,5 +356,45 @@ func TestCanaryNoSwapAccounting(t *testing.T) {
 		}
 		h.fake.On(checkstest.ArgsLogsC, dockertest.Response{Stdout: h.cn.ProbeOutput(map[string]string{"memory_swap_max": "absent"})})
 		expect(t, h.run(), "canary.memory", c.status, c.detail)
+	}
+}
+
+// TestCanaryHostWithoutMPTCP: no /proc/sys/net/mptcp on the host means no
+// sysctls in the project, and canary.mptcp needs the kernel to have no
+// MPTCP inside the canary too.
+func TestCanaryHostWithoutMPTCP(t *testing.T) {
+	h := newHarness(t)
+	os.RemoveAll(filepath.Join(h.root, "hostfs/proc/sys/net/mptcp"))
+	h.fake.On(checkstest.ArgsLogsC, dockertest.Response{Stdout: h.cn.ProbeOutput(map[string]string{"mptcp": "absent", "mptcp_socket": "eprotonosupport"})})
+	rep := h.run()
+	expect(t, rep, "canary.mptcp", Pass, "the host has no MPTCP")
+	var file []byte
+	for i, c := range h.fake.Calls {
+		if strings.Join(c, " ") == strings.Join(checkstest.ArgsCreate, " ") {
+			file = h.fake.Stdins[i]
+		}
+	}
+	if len(file) == 0 || strings.Contains(string(file), "sysctls") {
+		t.Fatalf("project for a host without MPTCP:\n%s", file)
+	}
+	if err := compose.Validate(file, compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock, MPTCP: false}); err != nil {
+		t.Fatal(err)
+	}
+	// The canary saying MPTCP is off-but-present on such a host fails.
+	h = newHarness(t)
+	os.RemoveAll(filepath.Join(h.root, "hostfs/proc/sys/net/mptcp"))
+	expect(t, h.run(), "canary.mptcp", Fail, "the host has no MPTCP")
+}
+
+// TestCanaryMPTCPUnknownFailsClosed: if Warden can't tell whether the host
+// has MPTCP, the canary doesn't run.
+func TestCanaryMPTCPUnknownFailsClosed(t *testing.T) {
+	h := newHarness(t)
+	os.RemoveAll(filepath.Join(h.root, "hostfs/proc/sys/net"))
+	h.write("hostfs/proc/sys/net", "", 0o644) // ENOTDIR
+	rep := h.run()
+	expect(t, rep, "canary.mptcp", Fail, "cannot tell whether the kernel has MPTCP")
+	if h.fake.Called(checkstest.ArgsCreate) {
+		t.Fatal("the canary was created")
 	}
 }

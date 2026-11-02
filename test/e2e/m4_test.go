@@ -107,7 +107,8 @@ func TestCanaryLive(t *testing.T) {
 // TestCanaryNegativeControl runs the probe in a deliberately unhardened
 // container (no --cap-drop, no no-new-privileges, writable root, no
 // --sysctl, another non-root UID and GID) and requires canary.caps,
-// canary.nnp, canary.rootfs, canary.uid and canary.mptcp to fail.
+// canary.nnp, canary.rootfs, canary.uid and (on a host with MPTCP)
+// canary.mptcp to fail.
 func TestCanaryNegativeControl(t *testing.T) {
 	image := mustEnv(t, "WARDEN_E2E_RUNTIME_IMAGE")
 	r := dockerRunner(t)
@@ -147,14 +148,24 @@ func TestCanaryNegativeControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mptcp, err := hardening.HostMPTCP("/")
+	if err != nil {
+		t.Fatal(err)
+	}
 	vs := canary.Evaluate(obs, canary.Expect{
-		UID: uid, GID: gid, Resources: hardening.Resources{MemoryMB: 1536, CPUs: 1.5, Pids: 512}, DaemonAppArmor: true,
+		UID: uid, GID: gid, Resources: hardening.Resources{MemoryMB: 1536, CPUs: 1.5, Pids: 512}, DaemonAppArmor: true, MPTCP: mptcp,
 	}, canary.Host{})
 	got := map[string]canary.Verdict{}
 	for _, v := range vs {
 		got[v.ID] = v
 	}
-	for _, id := range []string{"canary.caps", "canary.nnp", "canary.rootfs", "canary.uid", "canary.mptcp"} {
+	mustFail := []string{"canary.caps", "canary.nnp", "canary.rootfs", "canary.uid"}
+	if mptcp {
+		// Without MPTCP in the kernel there is nothing to turn off: an
+		// unhardened container passes canary.mptcp there, correctly.
+		mustFail = append(mustFail, "canary.mptcp")
+	}
+	for _, id := range mustFail {
 		if got[id].Status != canary.Fail {
 			t.Errorf("%s: %s (%s) in an unhardened container, want fail", id, got[id].Status, got[id].Detail)
 		}

@@ -38,6 +38,7 @@ type ProjectParams struct {
 	MountDir     string // <state>/canary/<random>/mnt
 	Allow        []string
 	Resources    hardening.Resources // controller.resources
+	Host         hardening.Host
 }
 
 // ProbeHost is the host the canary uses for proxy-allow and no-dns: the
@@ -62,11 +63,11 @@ func Project(p ProjectParams) (compose.File, error) {
 	if err != nil {
 		return compose.File{}, err
 	}
-	proxyH, err := hardening.Settings(p.UID, p.GID, hardening.ProxyResources)
+	proxyH, err := hardening.Settings(p.UID, p.GID, hardening.ProxyResources, p.Host)
 	if err != nil {
 		return compose.File{}, err
 	}
-	canaryH, err := hardening.Settings(p.UID, p.GID, p.Resources)
+	canaryH, err := hardening.Settings(p.UID, p.GID, p.Resources, p.Host)
 	if err != nil {
 		return compose.File{}, err
 	}
