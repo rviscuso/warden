@@ -96,7 +96,7 @@ type entry struct {
 	mtime    time.Time
 }
 
-func snapshot(t *testing.T, root, canaryDir, stateFile string) map[string]entry {
+func snapshot(t *testing.T, root, canaryDir string) map[string]entry {
 	t.Helper()
 	m := map[string]entry{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -119,11 +119,6 @@ func snapshot(t *testing.T, root, canaryDir, stateFile string) map[string]entry 
 			// requires it to be empty afterwards.
 			e.mtime = time.Time{}
 		}
-		if p == stateFile {
-			// check's one write: the canary record. TestCheckIsReadOnly compares
-			// the parsed files instead, with only canary_pass allowed to differ.
-			e.size, e.mtime = 0, time.Time{}
-		}
 		m[p] = e
 		return nil
 	})
@@ -136,26 +131,11 @@ func snapshot(t *testing.T, root, canaryDir, stateFile string) map[string]entry 
 func TestCheckIsReadOnly(t *testing.T) {
 	s := newSandbox(t)
 	s.initialized(t)
-	before := snapshot(t, s.root, s.canaryDir(), s.stateFile())
-	stateBefore, err := state.Load(s.stateFile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := snapshot(t, s.root, s.canaryDir())
 	if _, _, code := s.warden(t, "", "check"); code != 0 {
 		t.Fatalf("check: exit %d", code)
 	}
-	after := snapshot(t, s.root, s.canaryDir(), s.stateFile())
-	stateAfter, err := state.Load(s.stateFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stateAfter.CanaryPass == nil {
-		t.Error("check passed but recorded no canary pass")
-	}
-	stateBefore.CanaryPass, stateAfter.CanaryPass = nil, nil
-	if b, a := mustJSON(t, stateBefore), mustJSON(t, stateAfter); b != a {
-		t.Errorf("check changed state.json beyond canary_pass:\nbefore %s\nafter  %s", b, a)
-	}
+	after := snapshot(t, s.root, s.canaryDir())
 	if entries, err := os.ReadDir(s.canaryDir()); err != nil || len(entries) != 0 {
 		t.Errorf("%s after check: %v %v, want empty", s.canaryDir(), entries, err)
 	}
@@ -249,13 +229,4 @@ func TestSharedMountDetected(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(status)) != "created" {
 		t.Fatalf("container state %q (%v): it must never be started", status, err)
 	}
-}
-
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }

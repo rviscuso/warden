@@ -190,10 +190,6 @@ func TestInitPins(t *testing.T) {
 		Daemon:        state.Daemon{ID: zeroID, Socket: h.sock, ServerVersion: "29.1.3", Runc: "1.4.0", Containerd: "2.2.2", Compose: "2.40.3"},
 		InitializedAt: h.now,
 	}
-	if s.CanaryPass == nil || s.CanaryPass.DaemonID != zeroID || !s.CanaryPass.At.Equal(h.now) {
-		t.Fatalf("canary pass %+v", s.CanaryPass)
-	}
-	s.CanaryPass = nil
 	if *s != want {
 		t.Fatalf("state %+v\nwant  %+v", s, want)
 	}

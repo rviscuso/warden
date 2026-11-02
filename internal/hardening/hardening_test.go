@@ -154,31 +154,3 @@ func TestSettingsRefusesUnknownMPTCP(t *testing.T) {
 		t.Error("String")
 	}
 }
-
-// TestDigest: the same inputs give the same digest; any change to what the
-// canary proves (UID, GID, limits, MPTCP status) changes it.
-func TestDigest(t *testing.T) {
-	present := Host{MPTCP: MPTCPPresent}
-	base, err := Digest(1000, 1000, res, present)
-	if err != nil || len(base) != 64 {
-		t.Fatalf("%q %v", base, err)
-	}
-	if again, _ := Digest(1000, 1000, res, present); again != base {
-		t.Fatal("not deterministic")
-	}
-	for name, d := range map[string]func() (string, error){
-		"uid":   func() (string, error) { return Digest(1001, 1000, res, present) },
-		"gid":   func() (string, error) { return Digest(1000, 1001, res, present) },
-		"mem":   func() (string, error) { return Digest(1000, 1000, Resources{2048, 1.5, 512}, present) },
-		"cpus":  func() (string, error) { return Digest(1000, 1000, Resources{1536, 2, 512}, present) },
-		"pids":  func() (string, error) { return Digest(1000, 1000, Resources{1536, 1.5, 1024}, present) },
-		"mptcp": func() (string, error) { return Digest(1000, 1000, res, Host{MPTCP: MPTCPAbsent}) },
-	} {
-		if got, err := d(); err != nil || got == base {
-			t.Errorf("%s: %q %v", name, got, err)
-		}
-	}
-	if _, err := Digest(1000, 1000, res, Host{}); err == nil {
-		t.Error("unknown MPTCP: no error")
-	}
-}

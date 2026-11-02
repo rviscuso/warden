@@ -5,8 +5,6 @@
 package hardening
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,25 +165,4 @@ func HostMPTCP(root string) (MPTCP, error) {
 		return MPTCPUnknown, fmt.Errorf("hardening: %s is not a directory", filepath.Join(root, "proc", "sys", "net", "mptcp"))
 	}
 	return MPTCPPresent, nil
-}
-
-// Digest is the SHA-256 (hex) of the hardening a canary run proves: the
-// JSON of Settings for the proxy's limits and for the controller's, for
-// uid:gid on host h. The canary record stores it; up compares it, so up
-// never starts containers with settings the canary hasn't proven.
-func Digest(uid, gid int, controller Resources, h Host) (string, error) {
-	var all []Fields
-	for _, r := range []Resources{ProxyResources, controller} {
-		f, err := Settings(uid, gid, r, h)
-		if err != nil {
-			return "", err
-		}
-		all = append(all, f)
-	}
-	b, err := json.Marshal(all)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
 }

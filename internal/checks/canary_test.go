@@ -8,13 +8,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/rviscuso/warden/internal/checks/checkstest"
 	"github.com/rviscuso/warden/internal/compose"
 	"github.com/rviscuso/warden/internal/docker/dockertest"
 	"github.com/rviscuso/warden/internal/hardening"
-	"github.com/rviscuso/warden/internal/state"
 	"github.com/rviscuso/warden/internal/wardenbin/wardenbintest"
 )
 
@@ -399,75 +397,5 @@ func TestCanaryMPTCPUnknownFailsClosed(t *testing.T) {
 	expect(t, rep, "canary.mptcp", Fail, "cannot tell whether the kernel has MPTCP")
 	if h.fake.Called(checkstest.ArgsCreate) {
 		t.Fatal("the canary was created")
-	}
-}
-
-// TestCanaryRecord: a passing init run produces the record; ModeUp passes
-// with it and fails on each kind of mismatch, without running the canary.
-func TestCanaryRecord(t *testing.T) {
-	h := newHarness(t)
-	rep := h.run() // ModeInit: installs the binary copy, runs the canary
-	if !rep.CanaryRan || rep.CanaryPass == nil {
-		t.Fatalf("ran %v, pass %+v", rep.CanaryRan, rep.CanaryPass)
-	}
-	good := *rep.CanaryPass
-	if good.DaemonID != rep.Daemon.ID || len(good.BinarySHA256) != 64 || len(good.HardeningSHA256) != 64 {
-		t.Fatalf("record %+v", good)
-	}
-	save := func(cp *state.CanaryPass) {
-		s := &state.State{Version: 1, Daemon: state.Daemon{ID: rep.Daemon.ID, Socket: h.sock}, InitializedAt: time.Now(), CanaryPass: cp}
-		if err := state.Save(h.env.Dirs.StateFile(), s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	up := func() *Report {
-		h.env.Mode = ModeUp
-		defer func() { h.env.Mode = ModeInit }()
-		return h.run()
-	}
-	save(&good)
-	creates := len(h.fake.Calls)
-	r := up()
-	expect(t, r, "canary.recorded", Pass, "on this daemon, with this binary and these settings")
-	if r.CanaryRan {
-		t.Error("ModeUp ran the canary")
-	}
-	for _, c := range h.fake.Calls[creates:] {
-		if strings.Join(c, " ") == strings.Join(checkstest.ArgsCreate, " ") {
-			t.Fatal("ModeUp created the canary")
-		}
-	}
-	for name, c := range map[string]struct {
-		edit func(*state.CanaryPass)
-		want string
-	}{
-		"other daemon":   {func(p *state.CanaryPass) { p.DaemonID = "11111111-1111-1111-1111-111111111111" }, "daemon " + rep.Daemon.ID + ", recorded 11111111"},
-		"other binary":   {func(p *state.CanaryPass) { p.BinarySHA256 = strings.Repeat("e", 64) }, "warden binary"},
-		"other settings": {func(p *state.CanaryPass) { p.HardeningSHA256 = strings.Repeat("e", 64) }, "hardening settings"},
-	} {
-		bad := good
-		c.edit(&bad)
-		save(&bad)
-		expect(t, up(), "canary.recorded", Fail, c.want)
-		_ = name
-	}
-	save(nil)
-	expect(t, up(), "canary.recorded", Fail, "no canary pass recorded")
-}
-
-// TestCanaryFailureHasNoRecord: a failing canary run produces no record,
-// and says it ran, so the caller withdraws an older one.
-func TestCanaryFailureHasNoRecord(t *testing.T) {
-	h := newHarness(t)
-	h.fake.On(checkstest.ArgsLogsC, dockertest.Response{Stdout: h.cn.ProbeOutput(map[string]string{"nnp": "0"})})
-	rep := h.run()
-	if !rep.CanaryRan || rep.CanaryPass != nil {
-		t.Fatalf("ran %v, pass %+v", rep.CanaryRan, rep.CanaryPass)
-	}
-	// Not run at all (an earlier check failed): nothing to withdraw.
-	h = newHarness(t)
-	h.fake.On([]string{"compose", "version", "--format", "json"}, dockertest.Response{ExitCode: 1, Stderr: "no compose"})
-	if rep := h.run(); rep.CanaryRan {
-		t.Fatal("CanaryRan without running")
 	}
 }

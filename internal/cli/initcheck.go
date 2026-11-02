@@ -43,7 +43,6 @@ func (e *env) checksEnv(mode checks.Mode, dirs paths.Dirs, home string) checks.E
 		NewRunner:   e.newRunner,
 		SystemDirs:  e.systemDirs,
 		Ctx:         context.Background(),
-		Now:         e.now,
 		Canary: checks.CanaryEnv{
 			Executable: e.executable,
 			Resolver:   e.resolver,
@@ -80,19 +79,14 @@ func runInit(e *env, jsonOut bool) int {
 	rep := checks.Run(e.checksEnv(checks.ModeInit, dirs, home))
 	printReport(e.stdout, rep, jsonOut)
 	if !rep.OK() {
-		if rep.CanaryRan {
-			// A canary that ran and failed withdraws any earlier pass, so up
-			// can't start containers on its strength.
-			recordCanary(e, "init", dirs, nil)
-		}
 		return ExitFail
 	}
-	return pinDaemon(e, dirs, rep.Daemon, rep.CanaryPass, jsonOut)
+	return pinDaemon(e, dirs, rep.Daemon, jsonOut)
 }
 
 // pinDaemon records the daemon. Changing an existing pin to another daemon
 // or socket is a trust change and needs an explicit "y".
-func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, cp *state.CanaryPass, jsonOut bool) int {
+func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
 	msg := e.stdout
 	if jsonOut {
 		msg = e.stderr // keep stdout pure JSON
@@ -121,7 +115,6 @@ func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, cp *state.CanaryPass, js
 		Daemon:        d,
 		InitializedAt: e.now().UTC(),
 		Controller:    keep,
-		CanaryPass:    cp,
 	}
 	if err := state.Save(file, s); err != nil {
 		fmt.Fprintf(e.stderr, "warden init: %v\n", err)
@@ -155,11 +148,6 @@ func runCheck(e *env, jsonOut bool) int {
 	}
 	rep := checks.Run(e.checksEnv(checks.ModeCheck, dirs, home))
 	printReport(e.stdout, rep, jsonOut)
-	// check's one write: the canary record up requires (set on a pass,
-	// cleared on a failure).
-	if rep.CanaryRan && !recordCanary(e, "check", dirs, rep.CanaryPass) {
-		return ExitFail
-	}
 	if !rep.OK() {
 		return ExitFail
 	}
@@ -238,30 +226,3 @@ const exampleExplanation = `An example config is printed on stdout. Fields:
 
 // exampleRuntimeImage is the example config's placeholder runtime_image.
 const exampleRuntimeImage = "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-
-// recordCanary sets (cp != nil) or clears the canary record in an existing
-// state.json. Nothing to clear without a state file.
-func recordCanary(e *env, cmd string, dirs paths.Dirs, cp *state.CanaryPass) bool {
-	file := dirs.StateFile()
-	s, err := state.Load(file)
-	if errors.Is(err, fs.ErrNotExist) && cp == nil {
-		return true
-	}
-	if err != nil {
-		fmt.Fprintf(e.stderr, "warden %s: recording the canary result: %v\n", cmd, err)
-		return false
-	}
-	if cp == nil && s.CanaryPass == nil {
-		return true
-	}
-	if cp != nil && cp.DaemonID != s.Daemon.ID {
-		fmt.Fprintf(e.stderr, "warden %s: the canary ran on daemon %s, not the pinned %s; not recorded\n", cmd, cp.DaemonID, s.Daemon.ID)
-		return false
-	}
-	s.CanaryPass = cp
-	if err := state.Save(file, s); err != nil {
-		fmt.Fprintf(e.stderr, "warden %s: recording the canary result: %v\n", cmd, err)
-		return false
-	}
-	return true
-}

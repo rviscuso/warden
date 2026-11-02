@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/rviscuso/warden/internal/config"
 	"github.com/rviscuso/warden/internal/controller"
@@ -55,7 +54,6 @@ type Mode int
 const (
 	ModeInit  Mode = iota // every check except daemon.pin
 	ModeCheck             // every check, read-only
-	ModeUp                // every check but the canary, which must have a matching record instead
 )
 
 // MinEngineVersion: daemon.version warns below it.
@@ -89,15 +87,6 @@ type Env struct {
 	Ctx       context.Context
 	// Canary is what the canary touches on the host besides Docker.
 	Canary CanaryEnv
-	// Now is the clock, for the canary record (nil: time.Now).
-	Now func() time.Time
-}
-
-func (e Env) now() time.Time {
-	if e.Now == nil {
-		return time.Now()
-	}
-	return e.Now()
 }
 
 // Report is the outcome of a run, plus what init needs to pin the daemon.
@@ -106,10 +95,6 @@ type Report struct {
 	Config    *config.Config
 	Workspace string       // resolved, if workspace.valid passed
 	Daemon    state.Daemon // what was observed (valid when OK())
-	// CanaryRan: the canary ran (init, check). CanaryPass: what it proved, if
-	// every canary check passed or warned; nil if any failed.
-	CanaryRan  bool
-	CanaryPass *state.CanaryPass
 }
 
 // OK reports whether no check failed.
@@ -153,15 +138,11 @@ func Run(env Env) *Report {
 	r.daemonSeccomp()
 	r.daemonAppArmor()
 	r.daemonVersion()
-	if env.Mode != ModeInit {
+	if env.Mode == ModeCheck {
 		r.daemonPin()
 	}
 	r.sharedMounts()
-	if env.Mode == ModeUp {
-		r.canaryRecorded()
-	} else {
-		r.canary()
-	}
+	r.canary()
 	return r.rep
 }
 
