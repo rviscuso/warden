@@ -294,6 +294,12 @@ func TestEvaluateEachCheck(t *testing.T) {
 		{id: "canary.uid", obs: map[string]string{"groups": "1000"}, want: Pass},
 		{id: "canary.memory", obs: map[string]string{"memory_max": "max"}, want: Fail},
 		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "max"}, want: Fail},
+		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "absent"}, host: func(h *Host) { h.SwapTotalKB = kb(0) }, want: Pass},
+		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "absent"}, host: func(h *Host) { h.SwapTotalKB = kb(2097148) }, want: Fail},
+		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "absent"}, host: func(h *Host) { h.SwapErr = errors.New("no meminfo") }, want: Fail},
+		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "absent"}, want: Fail}, // swap never read: unknown
+		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "absent", "memory_max": "max"}, host: func(h *Host) { h.SwapTotalKB = kb(0) }, want: Fail},
+		{id: "canary.memory", obs: map[string]string{"memory_swap_max": "error: permission denied"}, host: func(h *Host) { h.SwapTotalKB = kb(0) }, want: Fail},
 		{id: "canary.pids", obs: map[string]string{"pids_max": "max"}, want: Fail},
 		{id: "canary.cpu", obs: map[string]string{"cpu_max": "max 100000"}, want: Fail},
 		{id: "canary.cpu", obs: map[string]string{"cpu_max": "150000 50000"}, want: Fail},
@@ -429,5 +435,47 @@ func TestProjectRendersAndValidates(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"container_name": "warden-canary-proxy"`) {
 		t.Errorf("rendered:\n%s", b)
+	}
+}
+
+func kb(n int64) *int64 { return &n }
+
+func TestReadSwapTotal(t *testing.T) {
+	cases := map[string]struct {
+		meminfo string
+		want    int64
+		ok      bool
+	}{
+		"swap":       {"MemTotal:       16303420 kB\nSwapTotal:       2097148 kB\nSwapFree:        2097148 kB\n", 2097148, true},
+		"no swap":    {"MemTotal:       16303420 kB\nSwapTotal:             0 kB\n", 0, true},
+		"no line":    {"MemTotal:       16303420 kB\n", 0, false},
+		"no unit":    {"SwapTotal: 0\n", 0, false},
+		"not int":    {"SwapTotal: zero kB\n", 0, false},
+		"negative":   {"SwapTotal: -1 kB\n", 0, false},
+		"other unit": {"SwapTotal: 0 MB\n", 0, false},
+	}
+	for name, c := range cases {
+		root := t.TempDir()
+		os.MkdirAll(filepath.Join(root, "proc"), 0o755)
+		os.WriteFile(filepath.Join(root, "proc", "meminfo"), []byte(c.meminfo), 0o644)
+		got, err := ReadSwapTotal(root)
+		if (err == nil) != c.ok || got != c.want {
+			t.Errorf("%s: got %d, %v", name, got, err)
+		}
+	}
+	if _, err := ReadSwapTotal(t.TempDir()); err == nil {
+		t.Error("missing meminfo: no error")
+	}
+}
+
+// TestProbeNoSwapAccounting: a missing memory.swap.max is reported as
+// absent, not as a read error, so Evaluate can apply the host rule.
+func TestProbeNoSwapAccounting(t *testing.T) {
+	root := hardenedRoot(t)
+	os.Remove(filepath.Join(root, "sys/fs/cgroup/memory.swap.max"))
+	p := newProbe(t, root)
+	p.control(t, "no_host=skip\n")
+	if obs := p.run(t); obs["memory_swap_max"] != "absent" {
+		t.Fatalf("memory_swap_max = %q", obs["memory_swap_max"])
 	}
 }

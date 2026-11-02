@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -80,6 +82,11 @@ type Host struct {
 	OwnerUID, OwnerGID int
 	OwnerErr           error
 
+	// The host's SwapTotal in kB (nil: not read), for a kernel without swap
+	// accounting. Unknown is never "no swap".
+	SwapTotalKB *int64
+	SwapErr     error
+
 	ProxyLog []byte // the canary proxy's stdout
 }
 
@@ -150,8 +157,26 @@ func evaluate(id string, o map[string]string, e Expect, h Host) (Status, string)
 			fmt.Sprintf("Uid %s, Gid %s, Groups %q; want %s:%s and no other groups", o["uid"], o["gid"], o["groups"], u, g))
 	case "canary.memory":
 		want := strconv.FormatInt(hardening.MemoryBytes(e.Resources), 10)
-		return pf(o["memory_max"] == want && o["memory_swap_max"] == "0",
-			fmt.Sprintf("memory.max %s (want %s), memory.swap.max %s (want 0)", o["memory_max"], want, o["memory_swap_max"]))
+		detail := fmt.Sprintf("memory.max %s (want %s), memory.swap.max %s (want 0)", o["memory_max"], want, o["memory_swap_max"])
+		if o["memory_max"] != want {
+			return Fail, detail
+		}
+		switch o["memory_swap_max"] {
+		case "0":
+			return Pass, detail
+		case "absent":
+			// No swap accounting: no-swap holds only if the host has no swap.
+			switch {
+			case h.SwapErr != nil:
+				return Fail, "cannot prove no swap: the kernel has no memory.swap.max, and the host's swap is unknown (" + h.SwapErr.Error() + ")"
+			case h.SwapTotalKB == nil:
+				return Fail, "cannot prove no swap: the kernel has no memory.swap.max, and the host's swap wasn't read"
+			case *h.SwapTotalKB != 0:
+				return Fail, fmt.Sprintf("cannot prove no swap: the kernel has no memory.swap.max, and the host has %d kB of swap", *h.SwapTotalKB)
+			}
+			return Pass, fmt.Sprintf("memory.max %s; no swap accounting (memory.swap.max absent), and the host has no swap (SwapTotal 0 kB)", o["memory_max"])
+		}
+		return Fail, detail
 	case "canary.pids":
 		want := strconv.Itoa(e.Resources.Pids)
 		return pf(o["pids_max"] == want, fmt.Sprintf("pids.max %s (want %s)", o["pids_max"], want))
@@ -264,4 +289,30 @@ func proxyLogged(log []byte, host, reason string) bool {
 		}
 	}
 	return false
+}
+
+// ReadSwapTotal reads SwapTotal from <root>/proc/meminfo, in kB. Strict: a
+// missing or malformed line is an error, never zero.
+func ReadSwapTotal(root string) (int64, error) {
+	path := filepath.Join(root, "proc", "meminfo")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		v, ok := strings.CutPrefix(line, "SwapTotal:")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(v)
+		if len(f) != 2 || f[1] != "kB" {
+			return 0, fmt.Errorf("%s: malformed SwapTotal line %q", path, line)
+		}
+		n, err := strconv.ParseInt(f[0], 10, 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("%s: malformed SwapTotal line %q", path, line)
+		}
+		return n, nil
+	}
+	return 0, fmt.Errorf("%s: no SwapTotal line", path)
 }

@@ -337,3 +337,24 @@ func TestCanaryIncompleteEnvFailsClosed(t *testing.T) {
 	h.env.Canary.Listen = nil
 	expect(t, h.run(), "canary.caps", Fail, "incomplete environment")
 }
+
+// TestCanaryNoSwapAccounting: without memory.swap.max, canary.memory
+// passes only if the host's /proc/meminfo says there is no swap.
+func TestCanaryNoSwapAccounting(t *testing.T) {
+	for _, c := range []struct {
+		meminfo string
+		status  Status
+		detail  string
+	}{
+		{"SwapTotal:             0 kB\n", Pass, "the host has no swap"},
+		{"SwapTotal:       2097148 kB\n", Fail, "cannot prove no swap: the kernel has no memory.swap.max, and the host has 2097148 kB of swap"},
+		{"", Fail, "cannot prove no swap"},
+	} {
+		h := newHarness(t)
+		if c.meminfo != "" {
+			h.write("hostfs/proc/meminfo", c.meminfo, 0o644)
+		}
+		h.fake.On(checkstest.ArgsLogsC, dockertest.Response{Stdout: h.cn.ProbeOutput(map[string]string{"memory_swap_max": "absent"})})
+		expect(t, h.run(), "canary.memory", c.status, c.detail)
+	}
+}

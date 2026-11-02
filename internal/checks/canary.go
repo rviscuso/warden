@@ -204,6 +204,11 @@ func (c *canaryRun) run() ([]canary.Verdict, error) {
 	}
 	host := canary.Host{DNSHost: probeHost}
 	host.RouteControl = c.dialControl()
+	if kb, err := canary.ReadSwapTotal(r.env.Root); err != nil {
+		host.SwapErr = err
+	} else {
+		host.SwapTotalKB = &kb
+	}
 	host.DNSControl = c.resolveControl(probeHost)
 
 	// The run directory and the project.

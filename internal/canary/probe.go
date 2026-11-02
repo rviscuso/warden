@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -194,8 +195,13 @@ func readStatus(path string) map[string]string {
 	return m
 }
 
+// readValue reads a one-line file: "absent" if it doesn't exist (the kernel
+// doesn't provide it), "error: ..." for any other failure.
 func readValue(path string) string {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "absent"
+	}
 	if err != nil {
 		return "error: " + err.Error()
 	}
