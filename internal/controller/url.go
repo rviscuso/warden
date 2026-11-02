@@ -2,6 +2,7 @@ package controller
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -17,8 +18,12 @@ var (
 	// hyperlinks (ESC ] 8 ; params ; URI ST) the URI is kept, separated by
 	// spaces, in case the visible text isn't the URL itself.
 	oscSeq = regexp.MustCompile(`\x1b\]([^\x07\x1b]*)(?:\x07|\x1b\\)`)
-	// CSI sequences (colours, cursor movement) and other two-byte escapes.
-	csiSeq = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]`)
+	// CSI sequences: ESC [ params intermediates final. Colours (final m) are
+	// removed; cursor movement and erasing stand for space a TUI skipped, so
+	// they become spaces and words, and a URL's end, stay apart.
+	csiSeq = regexp.MustCompile(`\x1b\[([0-?]*)[ -/]*([@-~])`)
+	// Other two-byte escapes.
+	escSeq = regexp.MustCompile(`\x1b[@-Z\\-_]`)
 )
 
 // StripTerminal removes terminal escape sequences from a TTY log, keeping
@@ -33,7 +38,21 @@ func StripTerminal(s string) string {
 		}
 		return ""
 	})
-	s = csiSeq.ReplaceAllString(s, "")
+	s = csiSeq.ReplaceAllStringFunc(s, func(m string) string {
+		sub := csiSeq.FindStringSubmatch(m)
+		switch sub[2] {
+		case "m": // colours and styles
+			return ""
+		case "C": // cursor forward n columns: n spaces
+			n, err := strconv.Atoi(sub[1])
+			if err != nil || n < 1 {
+				n = 1
+			}
+			return strings.Repeat(" ", min(n, 256))
+		}
+		return " " // any other movement or erase
+	})
+	s = escSeq.ReplaceAllString(s, "")
 	return strings.ReplaceAll(s, "\r", "\n")
 }
 

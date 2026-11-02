@@ -46,3 +46,27 @@ func TestLastLines(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// TestStripTerminalKeepsSpaces: TUIs draw spaces as cursor movement. The
+// first live run showed "WelcometoClaudeCodev2.1.309" before this fix; a
+// URL followed by such a gap would have absorbed the next word.
+func TestStripTerminalKeepsSpaces(t *testing.T) {
+	cases := map[string]string{
+		"Welcome\x1b[1Cto\x1b[1CClaude\x1b[1CCode": "Welcome to Claude Code",
+		"a\x1b[3Cb":                      "a   b",
+		"a\x1b[Cb":                       "a b", // no count: one column
+		"\x1b[1mbold\x1b[0m\x1b[1Cplain": "bold plain",
+		"x\x1b[2Ky":                      "x y", // erase: a space
+		"line\x1b[1;5Hnext":              "line next",
+		"a\x1b[99999Cb":                  "a" + strings.Repeat(" ", 256) + "b", // capped
+	}
+	for in, want := range cases {
+		if got := StripTerminal(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+	log := "Remote Control:\x1b[1Chttps://claude.ai/code/session_A\x1b[1CPress\x1b[1Center\n"
+	if got, _ := FindURL([]byte(log)); got != "https://claude.ai/code/session_A" {
+		t.Fatalf("FindURL = %q: the next word was glued on", got)
+	}
+}
