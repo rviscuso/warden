@@ -221,7 +221,9 @@ Precisely:
   tests from `/tmp`, and `noexec` adds nothing when the workspace is writable and executable),
   `mem_limit` and `memswap_limit` both the memory limit (no swap), `cpus`, `pids_limit`,
   `init: true`, and, so daemon defaults (`default-ipc-mode`, `default-cgroupns-mode`) can't weaken
-  them, `ipc: private` and `cgroup: private`; plus `restart: "no"` and `pull_policy: never`.
+  them, `ipc: private` and `cgroup: private`; `sysctls: {"net.mptcp.enabled": "0"}` (MPTCP is a
+  separate kernel protocol stack the agent has no use for; the sysctl is per network namespace, so
+  each container gets it whatever the host has); plus `restart: "no"` and `pull_policy: never`.
   Seccomp and AppArmor are left at Docker's defaults, not named: naming `apparmor=docker-default`
   would stop containers starting on a host without AppArmor. The canary verifies both.
 - Resources: the controller and the canary use `controller.resources`; the proxy uses constants,
@@ -457,6 +459,7 @@ Precisely:
 | canary.apparmor | `/proc/self/attr/current` is `docker-default (enforce)` (warn if the daemon has no AppArmor) |
 | canary.rootfs | Writing to `/` fails with `EROFS` |
 | canary.tmp | Writing to `/tmp` works, and `/tmp` is a `tmpfs` mounted `rw,nosuid,nodev` without `noexec`, `size=512m` and mode 1777 (the kernel omits `mode=` when it is 1777) |
+| canary.mptcp | `/proc/sys/net/mptcp/enabled` is `0` |
 | canary.no-route | A TCP connection to `1.1.1.1:443` fails within 3 s. Control: Warden first dials it from the host; if the host can't reach it, the check fails with "cannot prove: host has no route to the control address" |
 | canary.no-dns | The first allowlisted host doesn't resolve inside the sandbox. Control: the host must resolve it, or the check fails with "cannot prove" |
 | canary.no-host | Warden listens on the sandbox network's gateway IP (from `docker network inspect`), on a random port, only while the probe runs; the canary's connection must fail and the listener must receive nothing. If the host has no such address (`EADDRNOTAVAIL`), it passes with "host has no address on the sandbox network". No port is ever open on the LAN |
@@ -562,8 +565,8 @@ on the host with Docker access, which is root-equivalent.
   `runtime_image` pinned in `scripts/e2e.sh` (overridable with `RUNTIME_IMAGE`, digest only), and
   check afterwards that no canary container, network or directory is left. A **negative control**
   runs `warden probe` in a deliberately unhardened `docker run` (no `--cap-drop`, no
-  `no-new-privileges`, writable root, as another non-root UID and GID) and requires `canary.caps`, `canary.nnp`,
-  `canary.rootfs` and `canary.uid` to fail, so the canary is shown not to pass vacuously. These tests
+  `no-new-privileges`, writable root, no `sysctls`, as another non-root UID and GID) and requires
+  `canary.caps`, `canary.nnp`, `canary.rootfs`, `canary.uid` and `canary.mptcp` to fail, so the canary is shown not to pass vacuously. These tests
   extend the exception above to their networks and containers, under the same rules: `warden-e2e-`
   or canary names, always removed, never pulled, SKIP if the image isn.t local.
 
