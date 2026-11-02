@@ -50,8 +50,7 @@ Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
    Anything but `y` keeps the old pin and exits 1. This happens only after every other check passes.
 
 `check` runs the same checks plus `daemon.pin`, read-only: it creates nothing, and fails with
-"run warden init" if a directory or the state file is missing. Its one write is the canary record
-in `state.json` (see "Controller": `up` requires it).
+"run warden init" if a directory or the state file is missing. It writes nothing.
 
 `state.json` (0600, written atomically) holds:
 `{version: 1, warden_version, daemon: {id, socket, server_version, runc, containerd, compose}, initialized_at}`.
@@ -580,20 +579,12 @@ Precisely (decided in the M6 review):
   `compose.Validate` allows `tty` and `stdin_open`, and only with the value `true`.
 - **The proxy binary** is `init`'s verified copy, found with `wardenbin.Find`: `up` never installs
   it and fails with "run warden init" if it's missing.
-- **`up` runs the checks first.** Every check except the canary runs on every `up`, including
-  `daemon.pin` and `host.shared-mounts`: they're cheap, and `host.shared-mounts` is what catches a
-  shared folder. The canary is too slow for every `up`, so `up` instead requires a **canary
-  record** (check `canary.recorded`): `init` and `check` save one in `state.json` when every
-  canary check passes or warns, and remove it when any fails. It holds the daemon ID, the SHA-256
-  of the warden binary, a SHA-256 of the hardening settings (`hardening.Digest`: the JSON of
-  `hardening.Settings` for the proxy's limits and for `controller.resources`, for the user's
-  UID:GID and the host's MPTCP status), and the time. `up` refuses unless the record matches the
-  current daemon, binary and settings; the fix is `warden check`. So `up` never starts containers
-  whose hardening hasn't been proven on this daemon by this binary. Any failing check stops `up`
-  before anything is shown, with the check table.
-- **`check` writes one thing.** `check` still creates nothing, but it now updates the canary record
-  in `state.json` (atomically). `TestCheckIsReadOnly` allows exactly that: `state.json` may change
-  only in `canary_pass`.
+- **`up` runs every check first, the canary included**, exactly as `check` does, read-only, before
+  anything is shown: config, workspace, host and daemon checks, `daemon.pin`, `host.shared-mounts`
+  (which is what catches a shared folder) and the canary. Any failure stops `up` with the check
+  table. No canary result is ever recorded: a record could only say the sandbox was safe when it
+  was recorded, and the kernel, AppArmor or the daemon can change before `up`. A canary takes about
+  6 s on the operator's host, small next to the rest of `up`.
 - **Before anything is shown**, after the checks: mount validation re-run; the binary copy
   verified; the agent home created (`agents/` and `agents/controller/`, 0700) or, if it exists,
   required to be a private directory of the user. `down`, `status` and `logs` check the pin too: a
