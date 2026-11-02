@@ -159,7 +159,7 @@ func goodHost(dir string) Host {
 	return Host{DNSHost: "api.anthropic.com", NoHostAddr: "172.30.0.1:40000", OwnerUID: 1000, OwnerGID: 1000, ProxyLog: []byte(proxyLog)}
 }
 
-var expect = Expect{UID: 1000, GID: 1000, Resources: res, DaemonAppArmor: true, MPTCP: true}
+var expect = Expect{UID: 1000, GID: 1000, Resources: res, DaemonAppArmor: true, MPTCP: hardening.MPTCPPresent}
 
 func verdicts(vs []Verdict) map[string]Verdict {
 	m := map[string]Verdict{}
@@ -335,6 +335,9 @@ func TestEvaluateEachCheck(t *testing.T) {
 		{id: "canary.mptcp", obs: map[string]string{"mptcp": "absent", "mptcp_socket": "enoprotoopt"}, exp: noMPTCP, want: Fail},
 		{id: "canary.mptcp", obs: map[string]string{"mptcp": "0", "mptcp_socket": "enoprotoopt"}, exp: noMPTCP, want: Fail}, // disagree
 		{id: "canary.mptcp", obs: map[string]string{"mptcp": "error: permission denied", "mptcp_socket": "eprotonosupport"}, exp: noMPTCP, want: Fail},
+		// An unknown host status proves nothing, whatever the canary saw.
+		{id: "canary.mptcp", exp: func(e *Expect) { e.MPTCP = hardening.MPTCPUnknown }, want: Fail},
+		{id: "canary.mptcp", obs: map[string]string{"mptcp": "absent", "mptcp_socket": "eprotonosupport"}, exp: func(e *Expect) { e.MPTCP = hardening.MPTCPUnknown }, want: Fail},
 		{id: "canary.no-route", obs: map[string]string{"no_route": "connected"}, want: Fail},
 		{id: "canary.no-route", host: func(h *Host) { h.RouteControl = errors.New("unreachable") }, want: Fail},
 		{id: "canary.no-dns", obs: map[string]string{"no_dns": "resolved: [1.1.1.1]"}, want: Fail},
@@ -413,11 +416,12 @@ func TestProjectRendersAndValidates(t *testing.T) {
 		MountDir:     "/home/u/.local/state/warden/canary/r1/mnt",
 		Allow:        []string{".claude.com", "api.anthropic.com"},
 		Resources:    res,
+		Host:         hardening.Host{MPTCP: hardening.MPTCPPresent},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := compose.Render(f, compose.Policy{UID: 1000, GID: 1000, Socket: "/var/run/docker.sock"})
+	b, err := compose.Render(f, compose.Policy{UID: 1000, GID: 1000, Socket: "/var/run/docker.sock", MPTCP: hardening.MPTCPPresent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +497,7 @@ func TestProbeNoSwapAccounting(t *testing.T) {
 	}
 }
 
-func noMPTCP(e *Expect) { e.MPTCP = false }
+func noMPTCP(e *Expect) { e.MPTCP = hardening.MPTCPAbsent }
 
 func TestSocketResult(t *testing.T) {
 	for err, want := range map[error]string{

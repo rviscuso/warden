@@ -15,11 +15,11 @@ const (
 	sock      = "/var/run/docker.sock"
 )
 
-var pol = Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: true}
+var pol = Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: hardening.MPTCPPresent}
 
 func validFile(t *testing.T) File {
 	t.Helper()
-	h, err := hardening.Settings(1000, 1000, hardening.ProxyResources, hardening.Host{MPTCP: true})
+	h, err := hardening.Settings(1000, 1000, hardening.ProxyResources, hardening.Host{MPTCP: hardening.MPTCPPresent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestRenderRefusesSocketMounts(t *testing.T) {
 	linkDir := filepath.Join(dir, "rundir")
 	os.Symlink("/var/run", linkDir)
 
-	p := Policy{UID: 1000, GID: 1000, Socket: custom, MPTCP: true}
+	p := Policy{UID: 1000, GID: 1000, Socket: custom, MPTCP: hardening.MPTCPPresent}
 	for _, src := range []string{custom, dir, link, "/var/run/docker.sock", "/run", linkDir} {
 		f := validFile(t)
 		s := f.Services["proxy"]
@@ -221,7 +221,7 @@ func TestValidateRefusesRootPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []Policy{{0, 1000, sock, true}, {1000, 0, sock, true}} {
+	for _, p := range []Policy{{0, 1000, sock, hardening.MPTCPPresent}, {1000, 0, sock, hardening.MPTCPPresent}} {
 		if err := Validate(b, p); err == nil {
 			t.Errorf("policy %+v accepted", p)
 		}
@@ -238,7 +238,7 @@ func TestValidateRefusesTrailingData(t *testing.T) {
 // TestNoMPTCPHost: on a kernel without MPTCP the file has no sysctls, and
 // Validate requires exactly that; each policy refuses the other's form.
 func TestNoMPTCPHost(t *testing.T) {
-	noMPTCP := Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: false}
+	noMPTCP := Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: hardening.MPTCPAbsent}
 	f := validFile(t)
 	for k, s := range f.Services {
 		s.Sysctls = nil
@@ -288,5 +288,21 @@ func TestTTY(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"tty": true`) || !strings.Contains(string(b), `"stdin_open": true`) {
 		t.Fatalf("rendered:\n%s", b)
+	}
+}
+
+// TestValidateRefusesUnknownMPTCP: a policy that doesn't state the host's
+// MPTCP status validates nothing, whatever the file says.
+func TestValidateRefusesUnknownMPTCP(t *testing.T) {
+	with, err := Render(validFile(t), pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := Policy{UID: 1000, GID: 1000, Socket: sock}
+	if err := Validate(with, unknown); err == nil || !strings.Contains(err.Error(), "MPTCP status is unknown") {
+		t.Fatalf("with sysctls: %v", err)
+	}
+	if _, err := Render(validFile(t), unknown); err == nil {
+		t.Fatal("Render accepted an unknown MPTCP policy")
 	}
 }

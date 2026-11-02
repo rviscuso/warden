@@ -72,10 +72,10 @@ type Network struct {
 type Policy struct {
 	UID, GID int
 	Socket   string // the configured Docker socket
-	// MPTCP: the host kernel has MPTCP (hardening.HostMPTCP). With it, every
-	// service must turn it off with exactly hardening.SysctlValues; without
-	// it, no service may have a sysctls key at all.
-	MPTCP bool
+	// MPTCP is the host kernel's status (hardening.HostMPTCP). Present: every
+	// service must turn it off with exactly hardening.SysctlValues. Absent: no
+	// service may have a sysctls key at all. Unknown: Validate refuses.
+	MPTCP hardening.MPTCP
 }
 
 // DefaultSockets are refused as mount sources on every host, besides the
@@ -195,12 +195,17 @@ func validateService(m map[string]any, nets, svcs map[string]any, p Policy) erro
 			return fmt.Errorf("%s %v: must be %v", key, m[key], want)
 		}
 	}
-	if v, ok := m["sysctls"]; p.MPTCP {
+	switch v, ok := m["sysctls"]; p.MPTCP {
+	case hardening.MPTCPPresent:
 		if err := exactSysctls(v); err != nil {
 			return err
 		}
-	} else if ok {
-		return fmt.Errorf("sysctls %v: the host has no MPTCP, so no sysctls are allowed", v)
+	case hardening.MPTCPAbsent:
+		if ok {
+			return fmt.Errorf("sysctls %v: the host has no MPTCP, so no sysctls are allowed", v)
+		}
+	default:
+		return errors.New("the host's MPTCP status is unknown: refusing to validate")
 	}
 	mem, err1 := positiveInt(m["mem_limit"])
 	swap, err2 := positiveInt(m["memswap_limit"])

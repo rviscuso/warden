@@ -53,9 +53,30 @@ type Fields struct {
 	PullPolicy string   `json:"pull_policy"`
 }
 
+// MPTCP is the host kernel's MPTCP status. The zero value is unknown, and
+// everything that depends on it refuses unknown: a caller that forgets to
+// set it fails instead of silently dropping the sysctl.
+type MPTCP int
+
+const (
+	MPTCPUnknown MPTCP = iota
+	MPTCPPresent       // the kernel has MPTCP: every container turns it off
+	MPTCPAbsent        // the kernel has no MPTCP: nothing to turn off
+)
+
+func (m MPTCP) String() string {
+	switch m {
+	case MPTCPPresent:
+		return "present"
+	case MPTCPAbsent:
+		return "absent"
+	}
+	return "unknown"
+}
+
 // Host is what the hardening depends on about the host.
 type Host struct {
-	MPTCP bool // the kernel has MPTCP: see HostMPTCP
+	MPTCP MPTCP // from HostMPTCP; MPTCPUnknown is refused
 }
 
 // Settings returns the hardened fields for a container running as
@@ -71,8 +92,12 @@ func Settings(uid, gid int, r Resources, h Host) (Fields, error) {
 	}
 	mem := MemoryBytes(r)
 	var sysctls *Sysctls
-	if h.MPTCP {
+	switch h.MPTCP {
+	case MPTCPPresent:
 		sysctls = &Sysctls{}
+	case MPTCPAbsent:
+	default:
+		return Fields{}, errors.New("hardening: the host's MPTCP status is unknown: read it with HostMPTCP")
 	}
 	return Fields{
 		User:         fmt.Sprintf("%d:%d", uid, gid),
@@ -129,15 +154,15 @@ func (Sysctls) MarshalJSON() ([]byte, error) { return json.Marshal(SysctlValues(
 // <root>/proc/sys/net/mptcp is a directory. CONFIG_MPTCP is built in, never
 // a module, so a missing directory means no MPTCP at all. Any other error
 // is returned: the caller fails closed.
-func HostMPTCP(root string) (bool, error) {
+func HostMPTCP(root string) (MPTCP, error) {
 	fi, err := os.Stat(filepath.Join(root, "proc", "sys", "net", "mptcp"))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return false, nil
+		return MPTCPAbsent, nil
 	case err != nil:
-		return false, fmt.Errorf("hardening: cannot tell whether the kernel has MPTCP: %w", err)
+		return MPTCPUnknown, fmt.Errorf("hardening: cannot tell whether the kernel has MPTCP: %w", err)
 	case !fi.IsDir():
-		return false, fmt.Errorf("hardening: %s is not a directory", filepath.Join(root, "proc", "sys", "net", "mptcp"))
+		return MPTCPUnknown, fmt.Errorf("hardening: %s is not a directory", filepath.Join(root, "proc", "sys", "net", "mptcp"))
 	}
-	return true, nil
+	return MPTCPPresent, nil
 }

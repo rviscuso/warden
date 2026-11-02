@@ -66,7 +66,7 @@ type Expect struct {
 	UID, GID       int
 	Resources      hardening.Resources
 	DaemonAppArmor bool
-	MPTCP          bool // the host kernel has MPTCP (hardening.HostMPTCP)
+	MPTCP          hardening.MPTCP // the host kernel (hardening.HostMPTCP); unknown fails canary.mptcp
 }
 
 // Host is what Warden observed on the host side of the canary run.
@@ -196,10 +196,13 @@ func evaluate(id string, o map[string]string, e Expect, h Host) (Status, string)
 		return pf(o["tmp_write"] == "ok" && ok, fmt.Sprintf("write %s; %s%s", o["tmp_write"], o["tmp_mount"], why))
 	case "canary.mptcp":
 		detail := fmt.Sprintf("net.mptcp.enabled %s, MPTCP socket %s", o["mptcp"], o["mptcp_socket"])
-		if e.MPTCP {
+		switch e.MPTCP {
+		case hardening.MPTCPPresent:
 			return pf(o["mptcp"] == "0" && o["mptcp_socket"] == "enoprotoopt", detail+"; the host has MPTCP: want 0 and enoprotoopt (turned off)")
+		case hardening.MPTCPAbsent:
+			return pf(o["mptcp"] == "absent" && o["mptcp_socket"] == "eprotonosupport", detail+"; the host has no MPTCP: want absent and eprotonosupport")
 		}
-		return pf(o["mptcp"] == "absent" && o["mptcp_socket"] == "eprotonosupport", detail+"; the host has no MPTCP: want absent and eprotonosupport")
+		return Fail, "cannot prove: the host's MPTCP status is unknown (" + detail + ")"
 	case "canary.no-route":
 		if h.RouteControl != nil {
 			return Fail, "cannot prove: host has no route to the control address (" + h.RouteControl.Error() + ")"

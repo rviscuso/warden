@@ -20,7 +20,7 @@ const (
 	testImage   = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 )
 
-var testPolicy = compose.Policy{UID: 1000, GID: 1000, Socket: "/var/run/docker.sock", MPTCP: true}
+var testPolicy = compose.Policy{UID: 1000, GID: 1000, Socket: "/var/run/docker.sock", MPTCP: hardening.MPTCPPresent}
 
 func testParams() Params {
 	return Params{
@@ -33,7 +33,7 @@ func testParams() Params {
 		AgentHome:         "/srv/share/warden/agents/controller",
 		RemoteControlName: "warden",
 		Resources:         hardening.Resources{MemoryMB: 1536, CPUs: 1.5, Pids: 512},
-		Host:              hardening.Host{MPTCP: true},
+		Host:              hardening.Host{MPTCP: hardening.MPTCPPresent},
 	}
 }
 
@@ -129,6 +129,7 @@ func TestProjectRefuses(t *testing.T) {
 		"root":               func(p *Params) { p.UID = 0 },
 		"no allowlist":       func(p *Params) { p.Allow = nil },
 		"no resources":       func(p *Params) { p.Resources = hardening.Resources{} },
+		"unknown MPTCP":      func(p *Params) { p.Host = hardening.Host{} },
 	}
 	for name, fn := range cases {
 		p := testParams()
@@ -152,7 +153,7 @@ func TestProjectRefuses(t *testing.T) {
 // TestProxyIsTheCanarysProxy: ProxyService depends only on its inputs, so
 // up's proxy and the canary's differ only in the container name.
 func TestProxyServiceDeterministic(t *testing.T) {
-	pp := ProxyParams{UID: 1000, GID: 1000, ContainerName: "a", RuntimeImage: testRuntime, Binary: "/srv/b", Allow: []string{"x.example.com"}, Host: hardening.Host{MPTCP: true}}
+	pp := ProxyParams{UID: 1000, GID: 1000, ContainerName: "a", RuntimeImage: testRuntime, Binary: "/srv/b", Allow: []string{"x.example.com"}, Host: hardening.Host{MPTCP: hardening.MPTCPPresent}}
 	a, err := ProxyService(pp)
 	if err != nil {
 		t.Fatal(err)
