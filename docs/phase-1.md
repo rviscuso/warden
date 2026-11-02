@@ -93,6 +93,7 @@ internal/proxy/        the egress proxy: allowlist, CONNECT handling, connection
 internal/compose/      typed compose file, Render (the only producer of compose JSON) and Validate
 internal/canary/       the in-container probe (warden probe), its output format, the canary project
 internal/wardenbin/    copy and verify the warden binary under <state>/bin/
+internal/netx/         the one way Warden opens a listener: MPTCP off (netx.Listen)
 internal/controller/   compose generation, up/down/status/logs, post-start verification, RC URL
 images/controller/     reference controller image (Dockerfile only)
 images/                contract test for the Dockerfiles under it (images_test.go)
@@ -227,6 +228,14 @@ Precisely:
   per network namespace, so each container gets it whatever the host has); plus `restart: "no"` and `pull_policy: never`.
   Seccomp and AppArmor are left at Docker's defaults, not named: naming `apparmor=docker-default`
   would stop containers starting on a host without AppArmor. The canary verifies both.
+- MPTCP in Warden's own binary (see `DESIGN.md` §2, CVE-2026-98432): `go.mod` has
+  `godebug multipathtcp=0`, so every listener and dialer defaults to plain TCP, and every listener
+  Warden opens goes through `netx.Listen`, whose `net.ListenConfig` has `SetMultipathTCP(false)`
+  explicitly: the proxy's (`warden proxy`) and the canary's `no-host` listener on the host. A test
+  refuses any other listener in non-test code. Tests: the config reports `MultipathTCP() == false`;
+  a client dialing with `SetMultipathTCP(true)` gets a connection whose `MultipathTCP()` is false
+  (SKIP, never pass, where the kernel can't do MPTCP, which a control listener with MPTCP on shows);
+  and the build info's `DefaultGODEBUG` contains `multipathtcp=0`.
 - MPTCP: the goal is no MPTCP in the sandbox, and a kernel without MPTCP meets it, so Warden runs on
   one. `hardening.HostMPTCP` looks for `/proc/sys/net/mptcp` on the host: present, the sysctl is set;
   absent (`CONFIG_MPTCP` is built in, never a module, so the kernel has no MPTCP), no `sysctls` key
