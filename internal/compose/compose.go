@@ -37,6 +37,10 @@ type Service struct {
 	Networks      []string          `json:"networks"`
 	Volumes       []Bind            `json:"volumes,omitempty"`
 	DependsOn     []string          `json:"depends_on,omitempty"`
+	// An interactive terminal, for the controller (docker attach to log in).
+	// Validate accepts only true.
+	TTY       bool `json:"tty,omitempty"`
+	StdinOpen bool `json:"stdin_open,omitempty"`
 }
 
 // Bind is a bind mount. Make one with BindMount.
@@ -163,7 +167,7 @@ var (
 		"pids_limit", "init", "ipc", "cgroup", "restart", "pull_policy",
 		"container_name", "image", "entrypoint", "command", "networks",
 	}
-	allowedKeys = append(append([]string(nil), requiredKeys...), "environment", "volumes", "depends_on", "sysctls")
+	allowedKeys = append(append([]string(nil), requiredKeys...), "environment", "volumes", "depends_on", "sysctls", "tty", "stdin_open")
 )
 
 func validateService(m map[string]any, nets, svcs map[string]any, p Policy) error {
@@ -209,6 +213,12 @@ func validateService(m map[string]any, nets, svcs map[string]any, p Policy) erro
 		return errors.New("memswap_limit must equal mem_limit: no swap")
 	case err4 != nil || !(cpus > 0):
 		return errors.New("cpus must be positive")
+	}
+
+	for _, key := range []string{"tty", "stdin_open"} {
+		if v, ok := m[key]; ok && v != true {
+			return fmt.Errorf("%s %v: may only be true", key, v)
+		}
 	}
 
 	if s, ok := m["container_name"].(string); !ok || s == "" {
