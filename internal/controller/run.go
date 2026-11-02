@@ -341,7 +341,7 @@ func Up(env Env) error {
 		for _, l := range lastLines(log, 20) {
 			fmt.Fprintf(env.Stderr, "  %s\n", l)
 		}
-		return fail("first run? log in with `docker attach warden-controller`, detach with Ctrl-P Ctrl-Q.",
+		return fail("first run? log in with `docker attach warden-controller` (detach with Ctrl-P Ctrl-Q), then run `warden status`; or run `warden down` to stop",
 			"no Remote Control URL yet; the containers are still running")
 	}
 	t := env.Now().UTC()
@@ -425,23 +425,51 @@ func (s *session) verify(name string) error {
 	return last
 }
 
+// startedAt is the controller's .State.StartedAt, checked to be a time.
+func (s *session) startedAt() (string, error) {
+	out, err := s.docker(s.env.Ctx, "inspect", "--type", "container", "--format", "{{.State.StartedAt}}", ControllerName)
+	if err != nil {
+		return "", err
+	}
+	t := strings.TrimSpace(string(out))
+	if _, err := time.Parse(time.RFC3339Nano, t); err != nil {
+		return "", fmt.Errorf("unexpected start time for %s: %q", ControllerName, t)
+	}
+	return t, nil
+}
+
+// readURL reads the controller's log since the container started, so a
+// URL from an earlier run can never match, and finds the URL in it.
+func (s *session) readURL(since string) (string, []byte, error) {
+	out, errOut, code, err := s.r.Run(s.env.Ctx, []string{"logs", "--since", since, ControllerName}, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	if code != 0 {
+		return "", nil, fmt.Errorf("docker logs %s exited %d: %s", ControllerName, code, strings.TrimSpace(string(errOut)))
+	}
+	log := append(out, errOut...)
+	url, _ := FindURL(log)
+	return url, log, nil
+}
+
 // waitURL polls the controller's log for the Remote Control URL. It
 // returns "" and the last log when the wait ends without one.
 func (s *session) waitURL() (string, []byte, error) {
+	since, err := s.startedAt()
+	if err != nil {
+		return "", nil, err
+	}
 	var log []byte
 	for i := 0; i <= int(URLWait/URLPoll); i++ {
 		if i > 0 {
 			s.env.Sleep(URLPoll)
 		}
-		out, errOut, code, err := s.r.Run(s.env.Ctx, []string{"logs", ControllerName}, nil)
+		url, l, err := s.readURL(since)
 		if err != nil {
 			return "", nil, err
 		}
-		if code != 0 {
-			return "", nil, fmt.Errorf("docker logs %s exited %d: %s", ControllerName, code, strings.TrimSpace(string(errOut)))
-		}
-		log = append(out, errOut...)
-		if url, ok := FindURL(log); ok {
+		if log = l; url != "" {
 			return url, log, nil
 		}
 		up, _, err := s.running(ControllerName)
@@ -519,6 +547,27 @@ func Status(env Env, jsonOut bool) error {
 			cs.Recorded = (name == ProxyName && cs.ID == c.ProxyID) || (name == ControllerName && cs.ID == c.ControllerID)
 		}
 		rep.Containers = append(rep.Containers, cs)
+	}
+	// After a first login the URL appears in the log: one look, exactly as up
+	// does it, for the controller up started, and it's recorded.
+	if c.Running() && c.RemoteControlURL == "" && len(rep.Containers) == 2 &&
+		rep.Containers[1].Recorded && rep.Containers[1].State == "running" {
+		since, err := s.startedAt()
+		if err != nil {
+			return err
+		}
+		url, _, err := s.readURL(since)
+		if err != nil {
+			return err
+		}
+		if url != "" {
+			t := env.Now().UTC()
+			c.RemoteControlURL, c.URLFoundAt = url, &t
+			if err := s.save(); err != nil {
+				return err
+			}
+			rep.URL, rep.URLFoundAt = url, &t
+		}
 	}
 	if jsonOut {
 		enc := json.NewEncoder(env.Stdout)

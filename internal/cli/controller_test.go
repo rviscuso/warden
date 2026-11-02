@@ -16,6 +16,8 @@ var (
 	proxyID      = strings.Repeat("1", 64)
 	controllerID = strings.Repeat("2", 64)
 	testURL      = "https://claude.ai/code/session_test"
+	testStarted  = "2026-11-02T09:00:00.123456789Z"
+	logsArgs     = []string{"logs", "--since", testStarted, "warden-controller"}
 )
 
 func (h *host) composeFile() string { return filepath.Join(h.stateDir(), "compose", "warden.json") }
@@ -59,7 +61,8 @@ func (h *host) scriptUp(log string) {
 		dockertest.Response{Stdout: proxyID + "\n" + controllerID + "\n"})
 	h.fake.On([]string{"inspect", "--type", "container", "--format", "{{.State.Running}} {{.State.Pid}}", "warden-proxy"}, dockertest.Response{Stdout: "true 600\n"})
 	h.fake.On([]string{"inspect", "--type", "container", "--format", "{{.State.Running}} {{.State.Pid}}", "warden-controller"}, dockertest.Response{Stdout: "true 700\n"})
-	h.fake.On([]string{"logs", "warden-controller"}, dockertest.Response{Stdout: log})
+	h.fake.On([]string{"inspect", "--type", "container", "--format", "{{.State.StartedAt}}", "warden-controller"}, dockertest.Response{Stdout: testStarted + "\n"})
+	h.fake.On(logsArgs, dockertest.Response{Stdout: log})
 }
 
 func (h *host) called(args ...string) bool { return h.fake.Called(args) }
@@ -85,6 +88,9 @@ func TestUpFirstApply(t *testing.T) {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, r.stdout)
 		}
+	}
+	if !h.called(logsArgs...) || h.called("logs", "warden-controller") {
+		t.Error("the log must be read only since the container started")
 	}
 	if !strings.Contains(r.stderr, "Apply? [y/N] ") {
 		t.Errorf("stderr %q", r.stderr)
@@ -132,13 +138,13 @@ func TestUpDiffAndSameContainer(t *testing.T) {
 	}
 	// Unchanged: no diff, and the same container keeps its URL without
 	// reading the log again.
-	logsBefore := countCalls(h, "logs", "warden-controller")
+	logsBefore := countCalls(h, logsArgs...)
 	r := h.run("up")
 	if r.code != ExitOK || !strings.Contains(r.stdout, "No changes since the last apply.") ||
 		!strings.Contains(r.stdout, "Remote Control: "+testURL+" (the controller wasn't recreated)") {
 		t.Fatalf("second up: %d\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
-	if countCalls(h, "logs", "warden-controller") != logsBefore {
+	if countCalls(h, logsArgs...) != logsBefore {
 		t.Error("read the log for an unchanged container")
 	}
 	// A config change shows exactly what changes.
@@ -194,8 +200,8 @@ func TestUpNoURL(t *testing.T) {
 	h := upHost(t)
 	h.scriptUp("Please log in.\nVisit https://claude.ai/login\n")
 	r := h.run("up")
-	if r.code != ExitFail || !strings.Contains(r.stderr, "docker attach warden-controller") ||
-		!strings.Contains(r.stderr, "  Visit https://claude.ai/login") {
+	if r.code != ExitFail || !strings.Contains(r.stderr, "docker attach warden-controller` (detach with Ctrl-P Ctrl-Q), then run `warden status`") ||
+		!strings.Contains(r.stderr, "or run `warden down` to stop") || !strings.Contains(r.stderr, "  Visit https://claude.ai/login") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 	if c := h.loadState().Controller; !c.Running() || c.RemoteControlURL != "" {
@@ -210,7 +216,7 @@ func TestUpControllerStopped(t *testing.T) {
 		dockertest.Response{Stdout: "true 700\n", Do: func([]byte) {}})
 	// Running for verification, then stopped while waiting for the URL.
 	n := 0
-	h.fake.On([]string{"logs", "warden-controller"}, dockertest.Response{Stdout: "crashed\n", Do: func([]byte) {
+	h.fake.On(logsArgs, dockertest.Response{Stdout: "crashed\n", Do: func([]byte) {
 		n++
 		h.fake.On([]string{"inspect", "--type", "container", "--format", "{{.State.Running}} {{.State.Pid}}", "warden-controller"},
 			dockertest.Response{Stdout: "false 0\n"})
@@ -393,5 +399,45 @@ func TestUpMPTCPUnknownFailsClosed(t *testing.T) {
 	r := h.run("up")
 	if r.code != ExitFail || !strings.Contains(r.stderr, "cannot tell whether the kernel has MPTCP") || strings.Contains(r.stderr, "Apply?") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
+	}
+}
+
+// TestStatusFindsURLAfterLogin: up found no URL (not logged in yet); after
+// the login, status finds it in the log since the container started and
+// records it.
+func TestStatusFindsURLAfterLogin(t *testing.T) {
+	h := upHost(t)
+	h.scriptUp("Please log in.\n")
+	if r := h.run("up"); r.code != ExitFail {
+		t.Fatalf("up: %d", r.code)
+	}
+	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", exampleRuntimeImage)})
+	h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: inspectJSON(controllerID, "running", "sha256:x")})
+	h.fake.On(logsArgs, dockertest.Response{Stdout: "Please log in.\nLogged in.\n" + testURL + "\n"})
+	r := h.run("status")
+	if r.code != ExitOK || !strings.Contains(r.stdout, "Last Remote Control URL: "+testURL) {
+		t.Fatalf("%d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	if c := h.loadState().Controller; c.RemoteControlURL != testURL || c.URLFoundAt == nil {
+		t.Fatalf("not recorded: %+v", c)
+	}
+}
+
+// TestStatusLooksOnlyAtWardensRunningController: no lookup for a container
+// up didn't start, or one that isn't running.
+func TestStatusLooksOnlyAtWardensRunningController(t *testing.T) {
+	for name, ctl := range map[string]string{
+		"other ID": inspectJSON(strings.Repeat("3", 64), "running", "sha256:x"),
+		"stopped":  inspectJSON(controllerID, "exited", "sha256:x"),
+	} {
+		h := upHost(t)
+		h.scriptUp("Please log in.\n")
+		h.run("up")
+		before := countCalls(h, logsArgs...)
+		h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", exampleRuntimeImage)})
+		h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: ctl})
+		if r := h.run("status"); r.code != ExitOK || countCalls(h, logsArgs...) != before {
+			t.Errorf("%s: code %d, log read %d times", name, r.code, countCalls(h, logsArgs...)-before)
+		}
 	}
 }
