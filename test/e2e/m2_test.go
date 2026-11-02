@@ -5,10 +5,12 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -88,9 +90,10 @@ func TestInitAndCheckOnRealDaemon(t *testing.T) {
 }
 
 type entry struct {
-	mode  fs.FileMode
-	size  int64
-	mtime time.Time
+	mode     fs.FileMode
+	size     int64
+	uid, gid uint32
+	mtime    time.Time
 }
 
 func snapshot(t *testing.T, root, canaryDir string) map[string]entry {
@@ -104,10 +107,16 @@ func snapshot(t *testing.T, root, canaryDir string) map[string]entry {
 		if err != nil {
 			return err
 		}
-		e := entry{fi.Mode(), fi.Size(), fi.ModTime()}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("%s: no owner information", p)
+		}
+		e := entry{fi.Mode(), fi.Size(), st.Uid, st.Gid, fi.ModTime()}
 		if p == canaryDir {
-			// The canary creates its run directory here and removes it again:
-			// the directory's mtime changes, its contents don't.
+			// The one exception: the canary creates its run directory here and
+			// removes it, which changes this directory's own mtime. Its mode,
+			// size and owner are still compared, and TestCheckIsReadOnly
+			// requires it to be empty afterwards.
 			e.mtime = time.Time{}
 		}
 		m[p] = e
@@ -127,6 +136,12 @@ func TestCheckIsReadOnly(t *testing.T) {
 		t.Fatalf("check: exit %d", code)
 	}
 	after := snapshot(t, s.root, s.canaryDir())
+	if entries, err := os.ReadDir(s.canaryDir()); err != nil || len(entries) != 0 {
+		t.Errorf("%s after check: %v %v, want empty", s.canaryDir(), entries, err)
+	}
+	if _, ok := after[s.canaryDir()]; !ok {
+		t.Errorf("%s is gone after check", s.canaryDir())
+	}
 	for p, e := range after {
 		if b, ok := before[p]; !ok || b != e {
 			t.Errorf("check changed %s", p)
