@@ -55,6 +55,16 @@ func (d Dirs) ComposeDir() string { return filepath.Join(d.State, "compose") }
 // DockerConfigDir is the empty DOCKER_CONFIG Warden passes to the docker CLI.
 func (d Dirs) DockerConfigDir() string { return filepath.Join(d.State, "docker-config") }
 
+// BinDir holds the verified copies of the warden binary that the proxy and
+// the canary run from (read-only), never the controller.
+func (d Dirs) BinDir() string { return filepath.Join(d.State, "bin") }
+
+// CanaryDir holds one temporary directory per canary run, removed after it.
+func (d Dirs) CanaryDir() string { return filepath.Join(d.State, "canary") }
+
+// CanaryLock is flocked for the length of a canary run: one at a time.
+func (d Dirs) CanaryLock() string { return filepath.Join(d.State, "canary.lock") }
+
 // AgentsDir holds one home directory per agent.
 func (d Dirs) AgentsDir() string { return filepath.Join(d.Share, "agents") }
 
