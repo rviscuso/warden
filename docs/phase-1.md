@@ -609,10 +609,14 @@ Precisely (**proposed in M6, pending approval**):
     (all four fields) equal the user's, `CapEff` and `CapBnd` are zero, `NoNewPrivs` is 1.
   - On any failure: `docker compose -p warden -f <file> down`, the container IDs are cleared from
     state, and `up` exits 1 with what it observed.
-- **Remote Control URL.** One function, `controller.FindURL`: `docker logs --tail 2000
-  warden-controller` every 2 s for up to 60 s; ANSI escape sequences (CSI and OSC, including OSC 8
-  hyperlinks) are removed before matching `https://claude\.ai/code/\S+`; the last match wins. If the
-  controller stops running, the wait ends at once. Found: saved in state and printed. Not found:
+- **Remote Control URL.** One function, `controller.FindURL`: `docker logs warden-controller`
+  (the whole log: a new container's is small, and the runner's 16 MiB cap bounds it) every 2 s for up
+  to 60 s; ANSI escape sequences (CSI and OSC, including OSC 8
+  hyperlinks, whose target is kept) are removed before matching `https://claude\.ai/code/\S+`. The
+  **first** match wins: Claude Code prints the URL at startup, before the agent does anything, and a
+  later URL may be one the agent printed (the log is agent-influenced output). If `up -d` kept the
+  recorded controller container (same ID) and a URL is recorded, that URL is kept and the log isn't
+  read. If the controller stops running, the wait ends at once. Found: saved in state and printed. Not found:
   the last 20 log lines, the attach hint, and exit 1, with the containers left running so the user
   can log in.
 - **`down`:** pin check, then `docker compose -p warden down` (5 minutes; never `-v`, never `-f`).
