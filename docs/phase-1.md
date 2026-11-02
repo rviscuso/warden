@@ -640,8 +640,10 @@ Precisely (**proposed in M6, pending approval**):
 - **Live test** (`TestUpDown`): with `CONTROLLER_IMAGE` given to `e2e.sh`, `warden up` with `y`,
   post-start verification must pass, `check` must pass while up, `status` must show both running,
   then `warden down` must leave no `warden-*` container or network. The URL step needs a logged-in
-  agent home, so the test only requires that `up` gets past verification. Without
-  `CONTROLLER_IMAGE` it reports SKIP.
+  agent home, so the test only requires that `up` gets past verification. It reports SKIP without
+  `CONTROLLER_IMAGE`, and also if any `warden-*` container or network already exists: `up` uses the
+  real project name, so the test never touches a Warden that is up. Its containers are recorded
+  for the script's trap and `down` always runs at the end.
 
 ## Prototype results
 
