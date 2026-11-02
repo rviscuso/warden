@@ -314,6 +314,7 @@ func TestEvaluateEachCheck(t *testing.T) {
 		{id: "canary.no-dns", host: func(h *Host) { h.DNSControl = errors.New("no such host") }, want: Fail},
 		{id: "canary.no-host", obs: map[string]string{"no_host": "connected to 172.30.0.1:40000"}, want: Fail},
 		{id: "canary.no-host", host: func(h *Host) { h.NoHostAccepts = 1 }, want: Fail},
+		{id: "canary.no-host", host: func(h *Host) { h.NoHostErr = errors.New("no gateway in docker network inspect") }, want: Fail},
 		{id: "canary.no-host", obs: map[string]string{"no_host": "error: no control file from Warden"}, want: Fail},
 		{id: "canary.no-host", obs: map[string]string{"no_host": "skipped"}, host: func(h *Host) { h.NoHostSkipped = true }, want: Pass},
 		{id: "canary.no-host", obs: map[string]string{"no_host": "skipped"}, want: Fail}, // the probe skipped but Warden didn't

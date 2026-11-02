@@ -75,6 +75,7 @@ type Host struct {
 	NoHostSkipped bool   // the host has no address on the sandbox network
 	NoHostAddr    string // the listener's address
 	NoHostAccepts int    // connections the listener received
+	NoHostErr     error  // Warden couldn't set up the listener: cannot prove
 
 	OwnerUID, OwnerGID int
 	OwnerErr           error
@@ -177,6 +178,9 @@ func evaluate(id string, o map[string]string, e Expect, h Host) (Status, string)
 		}
 		return pf(strings.HasPrefix(o["no_dns"], "failed: "), h.DNSHost+" inside the sandbox: "+o["no_dns"])
 	case "canary.no-host":
+		if h.NoHostErr != nil {
+			return Fail, "cannot prove: " + h.NoHostErr.Error()
+		}
 		if h.NoHostSkipped {
 			return pf(o["no_host"] == "skipped", "host has no address on the sandbox network")
 		}
