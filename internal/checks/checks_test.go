@@ -649,3 +649,107 @@ func TestEmptySystemDirsMeanTheDefault(t *testing.T) {
 	h.writeConfig("/tmp", h.sock)
 	expect(t, h.run(), "workspace.valid", Fail, "workspace /tmp refused")
 }
+
+// recordUp writes a state file whose controller record names proxyID and
+// controllerID, as up leaves it.
+func (h *harness) recordUp(proxyID, controllerID string) {
+	h.t.Helper()
+	s := &state.State{
+		Version: 1, Daemon: state.Daemon{ID: zeroID, Socket: h.sock}, InitializedAt: time.Now(),
+		Controller: &state.Controller{AppliedCompose: "{}", AppliedAt: time.Now(), ProxyID: proxyID, ControllerID: controllerID},
+	}
+	if err := state.Save(h.env.Dirs.StateFile(), s); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+type mnt struct{ src, dst string }
+
+func containerJSON(id, name string, ms ...mnt) string {
+	var parts []string
+	for _, m := range ms {
+		parts = append(parts, `{"Type":"bind","Source":"`+m.src+`","Destination":"`+m.dst+`"}`)
+	}
+	return `{"Id":"` + id + `","Name":"/` + name + `","Mounts":[` + strings.Join(parts, ",") + `]}`
+}
+
+// TestSharedMountsWardensOwn: while up, Warden's own containers mount the
+// workspace, the agent home and the binary copy; by recorded ID, exactly
+// those are allowed, and nothing else.
+func TestSharedMountsWardensOwn(t *testing.T) {
+	pID, cID, other := fixtureIDs[0], fixtureIDs[1], fixtureIDs[2]
+	h0 := newHarness(t)
+	home := filepath.Join(h0.env.Dirs.Share, "agents", "controller")
+	bin := filepath.Join(h0.env.Dirs.State, "bin", "warden-"+strings.Repeat("a", 64))
+	ws := h0.ws
+	// Paths differ per harness root: rebuild them for each case.
+	fix := func(h *harness, s string) string { return strings.ReplaceAll(s, h0.root, h.root) }
+
+	good := func(h *harness) []string {
+		return []string{
+			containerJSON(pID, "warden-proxy", mnt{fix(h, bin), "/warden"}),
+			containerJSON(cID, "warden-controller", mnt{fix(h, ws), "/workspace"}, mnt{fix(h, home), "/home/agent"}),
+		}
+	}
+	t.Run("allowed", func(t *testing.T) {
+		h := newHarness(t)
+		h.recordUp(pID, cID)
+		cs := good(h)
+		h.fake.On(argsPS, dockertest.Response{Stdout: pID + "\n" + cID})
+		h.fake.On(inspectArgs(pID, cID), dockertest.Response{Stdout: "[" + strings.Join(cs, ",") + "]"})
+		expect(t, h.run(), "host.shared-mounts", Pass, "Warden's own mounts allowed on warden-proxy, warden-controller")
+	})
+	cases := map[string]func(h *harness) (record bool, cs []string){
+		"not recorded": func(h *harness) (bool, []string) { return false, good(h) },
+		"unrecorded ID": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(other, "warden-controller", mnt{fix(h, ws), "/workspace"})}
+		},
+		"extra mount on the controller": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(cID, "warden-controller", mnt{fix(h, ws), "/workspace"}, mnt{h.env.Dirs.Config, "/cfg"})}
+		},
+		"workspace at another target": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(cID, "warden-controller", mnt{fix(h, ws), "/src"})}
+		},
+		"roles swapped": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(pID, "warden-proxy", mnt{fix(h, ws), "/workspace"})}
+		},
+		"binary in the controller": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(cID, "warden-controller", mnt{fix(h, bin), "/warden"})}
+		},
+		"state dir in the proxy": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(pID, "warden-proxy", mnt{h.env.Dirs.State, "/warden"})}
+		},
+		"not a binary copy": func(h *harness) (bool, []string) {
+			return true, []string{containerJSON(pID, "warden-proxy", mnt{filepath.Join(h.env.Dirs.State, "bin", "warden-x"), "/warden"})}
+		},
+	}
+	for name, fn := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			record, cs := fn(h)
+			if record {
+				h.recordUp(pID, cID)
+			}
+			var ids []string
+			for _, c := range cs {
+				ids = append(ids, c[len(`{"Id":"`):len(`{"Id":"`)+64])
+			}
+			h.fake.On(argsPS, dockertest.Response{Stdout: strings.Join(ids, "\n")})
+			h.fake.On(inspectArgs(ids...), dockertest.Response{Stdout: "[" + strings.Join(cs, ",") + "]"})
+			if r := result(t, h.run(), "host.shared-mounts"); r.Status != Fail {
+				t.Errorf("%+v", r)
+			}
+		})
+	}
+}
+
+// TestSharedMountsAfterDown: down clears the IDs, so the same mounts are
+// findings again.
+func TestSharedMountsAfterDown(t *testing.T) {
+	h := newHarness(t)
+	h.recordUp("", "")
+	cID := fixtureIDs[1]
+	h.fake.On(argsPS, dockertest.Response{Stdout: cID})
+	h.fake.On(inspectArgs(cID), dockertest.Response{Stdout: "[" + containerJSON(cID, "warden-controller", mnt{h.ws, "/workspace"}) + "]"})
+	expect(t, h.run(), "host.shared-mounts", Fail, "warden-controller")
+}
