@@ -24,6 +24,7 @@ import (
 //	WARDEN_E2E_SHA         the commit being tested
 //	WARDEN_E2E_GO_IMAGE    the Go build image (pinned by digest, already local)
 //	WARDEN_E2E_RUNTIME_IMAGE  runtime_image for the canary (pinned by digest, already local)
+//	WARDEN_E2E_CONTROLLER_IMAGE  optional: the controller image to test (already local)
 //	WARDEN_E2E_CONTAINERS  file to append created container IDs to, for the trap
 //	WARDEN_E2E_SOCKET      the Docker socket (default /var/run/docker.sock)
 //	WARDEN_E2E_WORKSPACE   a workspace inside the temp root
