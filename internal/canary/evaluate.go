@@ -216,8 +216,8 @@ func cpuMatches(s string, cpus float64) bool {
 	return math.Abs(q-want) <= math.Max(1, want/1000)
 }
 
-// tmpOK checks the tmpfs options: rw, nosuid, nodev, not noexec, the size
-// and the mode from hardening.Tmpfs.
+// tmpOK checks the tmpfs options: rw, nosuid, nodev, not noexec, and the
+// size and mode from hardening.Tmpfs.
 func tmpOK(s string) (bool, string) {
 	f := strings.Fields(s)
 	if len(f) != 3 || f[0] != "fstype=tmpfs" {
@@ -230,8 +230,14 @@ func tmpOK(s string) (bool, string) {
 		return false, " (want rw,nosuid,nodev)"
 	case mount["noexec"]:
 		return false, " (want exec allowed)"
-	case !super["size=524288k"] || !super["mode=1777"]:
-		return false, " (want size=512m, mode=1777)"
+	case !super["size=524288k"]:
+		return false, " (want size=512m)"
+	}
+	// The kernel shows mode= only when it isn't the default 1777.
+	for o := range super {
+		if strings.HasPrefix(o, "mode=") && o != "mode=1777" {
+			return false, " (want mode 1777)"
+		}
 	}
 	return true, ""
 }

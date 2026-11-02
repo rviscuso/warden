@@ -306,6 +306,9 @@ func TestEvaluateEachCheck(t *testing.T) {
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,noexec super=rw,size=524288k,mode=1777"}, want: Fail},
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nodev super=rw,size=524288k,mode=1777"}, want: Fail},
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev super=rw,size=65536k,mode=1777"}, want: Fail},
+		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,relatime super=rw,size=524288k,inode64"}, want: Pass}, // mode 1777 is not shown
+		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev super=rw,size=524288k,mode=777"}, want: Fail},
+		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=tmpfs mount=rw,nosuid,nodev,noexec,relatime super=rw,size=524288k,inode64"}, want: Fail}, // this dev container's /tmp
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "fstype=overlay mount=rw,nosuid,nodev super=rw"}, want: Fail},
 		{id: "canary.tmp", obs: map[string]string{"tmp_mount": "missing"}, want: Fail},
 		{id: "canary.no-route", obs: map[string]string{"no_route": "connected"}, want: Fail},

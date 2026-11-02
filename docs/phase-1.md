@@ -456,7 +456,7 @@ Precisely:
 | canary.cpu | `/sys/fs/cgroup/cpu.max` matches the requested quota (period 100000, quota within 0.1% of `cpus` × period) |
 | canary.apparmor | `/proc/self/attr/current` is `docker-default (enforce)` (warn if the daemon has no AppArmor) |
 | canary.rootfs | Writing to `/` fails with `EROFS` |
-| canary.tmp | Writing to `/tmp` works, and `/tmp` is a `tmpfs` mounted `rw,nosuid,nodev` without `noexec` |
+| canary.tmp | Writing to `/tmp` works, and `/tmp` is a `tmpfs` mounted `rw,nosuid,nodev` without `noexec`, `size=512m` and mode 1777 (the kernel omits `mode=` when it is 1777) |
 | canary.no-route | A TCP connection to `1.1.1.1:443` fails within 3 s. Control: Warden first dials it from the host; if the host can't reach it, the check fails with "cannot prove: host has no route to the control address" |
 | canary.no-dns | The first allowlisted host doesn't resolve inside the sandbox. Control: the host must resolve it, or the check fails with "cannot prove" |
 | canary.no-host | Warden listens on the sandbox network's gateway IP (from `docker network inspect`), on a random port, only while the probe runs; the canary's connection must fail and the listener must receive nothing. If the host has no such address (`EADDRNOTAVAIL`), it passes with "host has no address on the sandbox network". No port is ever open on the LAN |
