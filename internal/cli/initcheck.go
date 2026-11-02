@@ -93,6 +93,7 @@ func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
 	}
 	file := dirs.StateFile()
 	old, err := state.Load(file)
+	var keep *state.Controller // what up applied, if the daemon is the same one
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
@@ -105,12 +106,15 @@ func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
 			fmt.Fprintln(e.stderr, "Kept the existing pin.")
 			return ExitFail
 		}
+	default:
+		keep = old.Controller
 	}
 	s := &state.State{
 		Version:       1,
 		WardenVersion: e.wardenVersion(),
 		Daemon:        d,
 		InitializedAt: e.now().UTC(),
+		Controller:    keep,
 	}
 	if err := state.Save(file, s); err != nil {
 		fmt.Fprintf(e.stderr, "warden init: %v\n", err)

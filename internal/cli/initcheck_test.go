@@ -380,3 +380,49 @@ func TestConfirmed(t *testing.T) {
 		}
 	}
 }
+
+// withController adds an up record to the pinned state.
+func (h *host) withController(t *testing.T) *state.Controller {
+	t.Helper()
+	s := h.loadState()
+	s.Controller = &state.Controller{
+		AppliedCompose: "{}\n", AppliedAt: h.now,
+		ProxyID: strings.Repeat("a", 64), ControllerID: strings.Repeat("b", 64),
+	}
+	if err := state.Save(h.stateFile(), s); err != nil {
+		t.Fatal(err)
+	}
+	return s.Controller
+}
+
+// TestInitKeepsControllerForSameDaemon: re-running init doesn't forget what
+// up applied, or the next up would lose its diff base and check would
+// stop recognising Warden's own containers.
+func TestInitKeepsControllerForSameDaemon(t *testing.T) {
+	h := newHost(t)
+	h.writeConfig()
+	h.run("init")
+	want := h.withController(t)
+	if r := h.run("init"); r.code != ExitOK {
+		t.Fatal(r.stderr)
+	}
+	if got := h.loadState().Controller; got == nil || *got != *want {
+		t.Fatalf("controller record %+v, want %+v", got, want)
+	}
+}
+
+// TestInitRepinDropsController: another daemon's container IDs mean nothing.
+func TestInitRepinDropsController(t *testing.T) {
+	h := newHost(t)
+	h.writeConfig()
+	h.run("init")
+	h.withController(t)
+	h.script(otherID)
+	h.stdin = "y\n"
+	if r := h.run("init"); r.code != ExitOK {
+		t.Fatal(r.stderr)
+	}
+	if got := h.loadState().Controller; got != nil {
+		t.Fatalf("controller record kept across a re-pin: %+v", got)
+	}
+}
