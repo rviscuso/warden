@@ -24,6 +24,7 @@ import (
 
 	"github.com/rviscuso/warden/internal/canary"
 	"github.com/rviscuso/warden/internal/docker"
+	"github.com/rviscuso/warden/internal/netx"
 	"github.com/rviscuso/warden/internal/proxy"
 )
 
@@ -89,16 +90,19 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		dockerPaths: docker.BinaryPaths,
 		newRunner:   func(o docker.Options) (docker.Runner, error) { return docker.New(o) },
 
+		// Every listener goes through netx: MPTCP off (DESIGN.md §2).
 		listen: func(address string) (net.Listener, error) {
-			return (&net.ListenConfig{}).Listen(context.Background(), "tcp", address)
+			return netx.Listen(context.Background(), "tcp", address)
 		},
 		signals: func() (context.Context, context.CancelFunc) {
 			return signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 		},
-		executable:   os.Executable,
-		canaryListen: net.Listen,
-		resolver:     net.DefaultResolver,
-		dialer:       &net.Dialer{},
+		executable: os.Executable,
+		canaryListen: func(network, address string) (net.Listener, error) {
+			return netx.Listen(context.Background(), network, address)
+		},
+		resolver: net.DefaultResolver,
+		dialer:   &net.Dialer{},
 	}, args)
 }
 
