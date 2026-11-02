@@ -50,7 +50,8 @@ Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
    Anything but `y` keeps the old pin and exits 1. This happens only after every other check passes.
 
 `check` runs the same checks plus `daemon.pin`, read-only: it creates nothing, and fails with
-"run warden init" if a directory or the state file is missing.
+"run warden init" if a directory or the state file is missing. Its one write is the canary record
+in `state.json` (see "Controller": `up` requires it).
 
 `state.json` (0600, written atomically) holds:
 `{version: 1, warden_version, daemon: {id, socket, server_version, runc, containerd, compose}, initialized_at}`.
@@ -569,7 +570,7 @@ Precisely (decided in the M5 review):
 `down`: `docker compose -p warden down` (never `-v`). `status`: daemon pin, container states, image,
 start time, last URL. `logs proxy|controller`: the last N lines of that container's log.
 
-Precisely (**proposed in M6, pending approval**):
+Precisely (decided in the M6 review):
 
 - **One proxy definition.** `controller.ProxyService` builds the proxy service; `up` and the canary
   both use it, so the canary's proxy is the one `up` runs by construction (only the names differ).
@@ -579,20 +580,34 @@ Precisely (**proposed in M6, pending approval**):
   `compose.Validate` allows `tty` and `stdin_open`, and only with the value `true`.
 - **The proxy binary** is `init`'s verified copy, found with `wardenbin.Find`: `up` never installs
   it and fails with "run warden init" if it's missing.
-- **Before anything is shown:** config loaded and validated; `state.json` loaded; the daemon pin
-  checked (`docker info --format '{{.ID}}'` equals the pinned ID, and the configured socket equals
-  the pinned socket); mount validation re-run; the binary copy verified; the agent home created
-  (`agents/` and `agents/controller/`, 0700) or, if it exists, required to be a private directory
-  of the user. `down`, `status` and `logs` check the pin too: a different daemon's containers mean
-  nothing to Warden.
-- **MPTCP:** `up` reads the host's MPTCP status with `hardening.HostMPTCP`, exactly as the canary
-  does, and passes it to `hardening.Settings` and `compose.Policy`; an error stops `up` before
-  anything is shown.
+- **`up` runs the checks first.** Every check except the canary runs on every `up`, including
+  `daemon.pin` and `host.shared-mounts`: they're cheap, and `host.shared-mounts` is what catches a
+  shared folder. The canary is too slow for every `up`, so `up` instead requires a **canary
+  record** (check `canary.recorded`): `init` and `check` save one in `state.json` when every
+  canary check passes or warns, and remove it when any fails. It holds the daemon ID, the SHA-256
+  of the warden binary, a SHA-256 of the hardening settings (`hardening.Digest`: the JSON of
+  `hardening.Settings` for the proxy's limits and for `controller.resources`, for the user's
+  UID:GID and the host's MPTCP status), and the time. `up` refuses unless the record matches the
+  current daemon, binary and settings; the fix is `warden check`. So `up` never starts containers
+  whose hardening hasn't been proven on this daemon by this binary. Any failing check stops `up`
+  before anything is shown, with the check table.
+- **`check` writes one thing.** `check` still creates nothing, but it now updates the canary record
+  in `state.json` (atomically). `TestCheckIsReadOnly` allows exactly that: `state.json` may change
+  only in `canary_pass`.
+- **Before anything is shown**, after the checks: mount validation re-run; the binary copy
+  verified; the agent home created (`agents/` and `agents/controller/`, 0700) or, if it exists,
+  required to be a private directory of the user. `down`, `status` and `logs` check the pin too: a
+  different daemon's containers mean nothing to Warden.
+- **MPTCP status is three-state.** `hardening.MPTCP` is `MPTCPUnknown` (the zero value),
+  `MPTCPPresent` or `MPTCPAbsent`; `hardening.HostMPTCP` returns one of the last two or an error.
+  `hardening.Settings`, `compose.Validate` and the canary's evaluation refuse `MPTCPUnknown`, so a
+  caller that forgets to set it fails instead of silently dropping the sysctl. `up` reads the
+  host's status exactly as the canary does.
 - **Last applied file.** `state.json` gains an optional `controller` object: `applied_compose`
   (the exact bytes applied, as a JSON string, so the diff compares bytes), `applied_at`,
-  `proxy_id` and `controller_id` (full container IDs), `remote_control_url` and `url_found_at`.
-  `version` stays 1. `init` keeps the object when it re-pins the same daemon and drops it when the
-  daemon changes.
+  `proxy_id` and `controller_id` (full container IDs), `remote_control_url`, `url_found_at` and
+  `incident`. `version` stays 1: optional fields are backward compatible. `init` keeps the object
+  when it re-pins the same daemon and drops it when the daemon changes.
 - **Approval.** `up` prints the generated file on stdout, then a line diff against the last
   applied file (unified style, 3 lines of context, `--- applied` / `+++ new`), or "first apply: no
   previous file", or "no changes since the last apply". Then `Apply? [y/N]` on stderr. It always
@@ -605,27 +620,38 @@ Precisely (**proposed in M6, pending approval**):
   - `docker inspect --format '{{.State.Running}} {{.State.Pid}}'` must be `true` and a PID > 0;
   - that PID is `docker-init`; its children are found by reading `/proc/*/status` for `PPid`
     (no dependency on `CONFIG_PROC_CHILDREN`); there must be exactly one, waited for up to 10 s;
-  - for both the init process and its child (checking init too is an addition): `Uid` and `Gid`
-    (all four fields) equal the user's, `CapEff` and `CapBnd` are zero, `NoNewPrivs` is 1.
-  - On any failure: `docker compose -p warden -f <file> down`, the container IDs are cleared from
-    state, and `up` exits 1 with what it observed.
-- **Remote Control URL.** One function, `controller.FindURL`: `docker logs warden-controller`
-  (the whole log: a new container's is small, and the runner's 16 MiB cap bounds it) every 2 s for up
-  to 60 s; ANSI escape sequences (CSI and OSC, including OSC 8
-  hyperlinks, whose target is kept) are removed before matching `https://claude\.ai/code/\S+`. The
-  **first** match wins: Claude Code prints the URL at startup, before the agent does anything, and a
-  later URL may be one the agent printed (the log is agent-influenced output). If `up -d` kept the
-  recorded controller container (same ID) and a URL is recorded, that URL is kept and the log isn't
-  read. If the controller stops running, the wait ends at once. Found: saved in state and printed. Not found:
-  the last 20 log lines, the attach hint, and exit 1, with the containers left running so the user
-  can log in.
-- **`down`:** pin check, then `docker compose -p warden down` (5 minutes; never `-v`, never `-f`).
-  The container IDs are cleared from state; the last applied file and URL are kept (the next `up`
-  diffs against it; `status` shows the URL as the last one).
+  - for both the init process and its child: `Uid` and `Gid` (all four fields) equal the user's;
+    `CapEff`, `CapBnd`, `CapPrm` and `CapAmb` are zero; `NoNewPrivs` is 1; `Seccomp` is 2.
+- **A verification failure is a security event: the evidence is kept.**
+  - `docker compose -p warden -f <file> stop -t 0`, so the agent stops running at once.
+  - `docker inspect` of both containers is saved to `<state>/incidents/<UTC time>.json` (0600;
+    `incidents/` 0700).
+  - The details and that path are printed, and `up` exits 1. The stopped containers stay in place,
+    and state records the incident.
+  - While an incident is recorded, `up` refuses, with the fix: inspect the containers and the
+    incident file, then `warden down`. `down` removes the containers as usual and clears the
+    incident.
+- **Remote Control URL.** One function, `controller.FindURL`, on
+  `docker logs --since <the container's .State.StartedAt> warden-controller`, so a URL from an
+  earlier run can never match. Polled every 2 s for up to 60 s. ANSI escape sequences (CSI and OSC,
+  including OSC 8 hyperlinks, whose target is kept) are removed before matching
+  `https://claude\.ai/code/\S+`. The **first** match wins: Claude Code prints the URL at startup,
+  before the agent does anything, and a later URL may be one the agent printed (the log is
+  agent-influenced output). If `up -d` kept the recorded controller container (same ID) and a URL is
+  recorded, that URL is kept and the log isn't read. If the controller stops running, the wait ends
+  at once. Found: saved in state and printed.
+- **No URL:** exit 1, the containers keep running, and the message says what to do: first run? log
+  in with `docker attach warden-controller` (detach with Ctrl-P Ctrl-Q), then run `warden status`;
+  or `warden down` to stop.
 - **`status [--json]`:** the pin (if it fails: printed, exit 1, nothing else queried); for each of
   `warden-proxy` and `warden-controller`: state (or `not found`), image, start time, ID, and whether
-  the ID is the one Warden recorded ("not started by Warden" otherwise); the last URL and when it
-  was found. Containers not running is not a failure: exit 0.
+  the ID is the one Warden recorded ("not started by Warden" otherwise); a recorded incident; the
+  last URL and when it was found. If no URL is recorded and the recorded controller is running,
+  `status` looks for one exactly as `up` does (one read, no wait) and records it, which is how the
+  URL arrives after a first login. Containers not running is not a failure: exit 0.
+- **`down`:** pin check, then `docker compose -p warden down` (5 minutes; never `-v`, never `-f`).
+  The container IDs and any incident are cleared from state; the last applied file and URL are kept
+  (the next `up` diffs against it; `status` shows the URL as the last one).
 - **`logs proxy|controller [-n N]`:** pin check, then `docker logs --tail N <container>`, stdout and
   stderr passed through. A non-zero docker exit is exit 1.
 - **`host.shared-mounts` and Warden's own containers.** A container whose full ID is recorded in
