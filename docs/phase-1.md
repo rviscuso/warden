@@ -221,11 +221,16 @@ Precisely:
   tests from `/tmp`, and `noexec` adds nothing when the workspace is writable and executable),
   `mem_limit` and `memswap_limit` both the memory limit (no swap), `cpus`, `pids_limit`,
   `init: true`, and, so daemon defaults (`default-ipc-mode`, `default-cgroupns-mode`) can't weaken
-  them, `ipc: private` and `cgroup: private`; `sysctls: {"net.mptcp.enabled": "0"}` (MPTCP is a
-  separate kernel protocol stack the agent has no use for; the sysctl is per network namespace, so
-  each container gets it whatever the host has); plus `restart: "no"` and `pull_policy: never`.
+  them, `ipc: private` and `cgroup: private`; `sysctls: {"net.mptcp.enabled": "0"}` when the
+  host has MPTCP (MPTCP is a separate kernel protocol stack the agent has no use for; the sysctl is
+  per network namespace, so each container gets it whatever the host has); plus `restart: "no"` and `pull_policy: never`.
   Seccomp and AppArmor are left at Docker's defaults, not named: naming `apparmor=docker-default`
   would stop containers starting on a host without AppArmor. The canary verifies both.
+- MPTCP: the goal is no MPTCP in the sandbox, and a kernel without MPTCP meets it, so Warden runs on
+  one. `hardening.HostMPTCP` looks for `/proc/sys/net/mptcp` on the host: present, the sysctl is set;
+  absent (`CONFIG_MPTCP` is built in, never a module, so the kernel has no MPTCP), no `sysctls` key
+  at all; any other error fails closed. `compose.Validate` requires exactly the form that matches
+  the host (`compose.Policy.MPTCP`). The field's type still can't express any other sysctl.
 - Resources: the controller and the canary use `controller.resources`; the proxy uses constants,
   256 MiB, 0.5 CPU and 128 PIDs.
 - Compose files are produced only by `compose.Render` (`internal/compose`), which marshals the typed
@@ -453,13 +458,13 @@ Precisely:
 | canary.nnp | `NoNewPrivs` is `1` |
 | canary.seccomp | `Seccomp` is `2` |
 | canary.uid | `Uid` and `Gid` (all four fields) equal the user's, and there are no supplementary groups other than the GID |
-| canary.memory | `/sys/fs/cgroup/memory.max` equals the requested bytes and `memory.swap.max` is `0` |
+| canary.memory | `/sys/fs/cgroup/memory.max` equals the requested bytes and `memory.swap.max` is `0`. If `memory.swap.max` doesn't exist (no swap accounting in the kernel), it passes only if the host has no swap at all (`SwapTotal: 0 kB` in the host's `/proc/meminfo`), saying so in the detail; otherwise it fails with "cannot prove" |
 | canary.pids | `/sys/fs/cgroup/pids.max` equals the requested limit |
 | canary.cpu | `/sys/fs/cgroup/cpu.max` matches the requested quota (period 100000, quota within 0.1% of `cpus` × period) |
 | canary.apparmor | `/proc/self/attr/current` is `docker-default (enforce)` (warn if the daemon has no AppArmor) |
 | canary.rootfs | Writing to `/` fails with `EROFS` |
 | canary.tmp | Writing to `/tmp` works, and `/tmp` is a `tmpfs` mounted `rw,nosuid,nodev` without `noexec`, `size=512m` and mode 1777 (the kernel omits `mode=` when it is 1777) |
-| canary.mptcp | `/proc/sys/net/mptcp/enabled` is `0` |
+| canary.mptcp | The probe opens an MPTCP socket (`socket(AF_INET, SOCK_STREAM, IPPROTO_MPTCP)`) and reads `/proc/sys/net/mptcp/enabled`. Host with MPTCP: the sysctl must be `0` and the socket must fail with `ENOPROTOOPT`. Host without: the sysctl must be absent and the socket must fail with `EPROTONOSUPPORT`. Anything else fails, including the host and the container disagreeing |
 | canary.no-route | A TCP connection to `1.1.1.1:443` fails within 3 s. Control: Warden first dials it from the host; if the host can't reach it, the check fails with "cannot prove: host has no route to the control address" |
 | canary.no-dns | The first allowlisted host doesn't resolve inside the sandbox. Control: the host must resolve it, or the check fails with "cannot prove" |
 | canary.no-host | Warden listens on the sandbox network's gateway IP (from `docker network inspect`), on a random port, only while the probe runs; the canary's connection must fail and the listener must receive nothing. If the host has no such address (`EADDRNOTAVAIL`), it passes with "host has no address on the sandbox network". No port is ever open on the LAN |
@@ -545,6 +550,10 @@ on the host with Docker access, which is root-equivalent.
 - It creates a temp root under `${XDG_CACHE_HOME:-$HOME/.cache}` (outside `/tmp`, which mount
   validation forbids), with siblings `ws/`, `config/`, `state/` and `share/`, never nested, and
   deletes the whole root on exit, including on failure (`trap`).
+- `TestCheckIsReadOnly` compares every path under the temp root before and after `check`: mode,
+  size, owner and mtime. The one exception is the mtime of `<state>/canary` itself, which changes
+  when the canary creates and removes its run directory; that directory must still be empty
+  afterwards, with the same mode and owner.
 - It clones the repo fresh into the temp root and checks out the SHA, and stops unless the script
   itself is byte-identical to that commit's `scripts/e2e.sh` (so the script that runs is the reviewed
   one, and knows what that commit's tests need), then builds and runs the unit
