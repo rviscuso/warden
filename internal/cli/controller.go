@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rviscuso/warden/internal/checks"
 	"github.com/rviscuso/warden/internal/controller"
 )
 
@@ -44,6 +45,18 @@ func defineUp(*flag.FlagSet) func(*env, []string) int {
 	return func(e *env, pos []string) int {
 		if len(pos) > 0 {
 			return usageError(e, "up", "unexpected arguments: "+strings.Join(pos, " "))
+		}
+		// Every check first, the canary included, exactly as warden check runs
+		// them (read-only): the sandbox is proven when up starts it, not before.
+		dirs, home, err := e.setup()
+		if err != nil {
+			fmt.Fprintf(e.stderr, "warden up: %v\n", err)
+			return ExitFail
+		}
+		if rep := checks.Run(e.checksEnv(checks.ModeCheck, dirs, home)); !rep.OK() {
+			printReport(e.stdout, rep, false)
+			fmt.Fprintln(e.stderr, "warden up: a check failed; nothing was shown or applied")
+			return ExitFail
 		}
 		return runController(e, "up", controller.Up)
 	}
