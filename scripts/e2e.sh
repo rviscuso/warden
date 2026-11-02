@@ -72,6 +72,11 @@ git clone --quiet --no-checkout "$REPO" "$ROOT/src"
 git -C "$ROOT/src" -c advice.detachedHead=false checkout --quiet "$SHA"
 HEAD=$(git -C "$ROOT/src" rev-parse HEAD)
 [[ $HEAD == "$SHA" ]] || die "checked out $HEAD, expected $SHA"
+# This script must be the tested commit's own copy: an older or newer one may not
+# set what that commit's tests need, and only the reviewed copy should run.
+SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
+cmp -s -- "$SELF" "$ROOT/src/scripts/e2e.sh" ||
+	die "this script ($SELF) is not $SHA's scripts/e2e.sh; run that commit's own copy: git checkout --detach $SHA && scripts/e2e.sh $SHA"
 echo "e2e: testing $SHA"
 echo "e2e: Go image $GO_IMAGE"
 echo "e2e: runtime image $RUNTIME_IMAGE"

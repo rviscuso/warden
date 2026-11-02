@@ -545,7 +545,9 @@ on the host with Docker access, which is root-equivalent.
 - It creates a temp root under `${XDG_CACHE_HOME:-$HOME/.cache}` (outside `/tmp`, which mount
   validation forbids), with siblings `ws/`, `config/`, `state/` and `share/`, never nested, and
   deletes the whole root on exit, including on failure (`trap`).
-- It clones the repo fresh into the temp root and checks out the SHA, then builds and runs the unit
+- It clones the repo fresh into the temp root and checks out the SHA, and stops unless the script
+  itself is byte-identical to that commit's `scripts/e2e.sh` (so the script that runs is the reviewed
+  one, and knows what that commit's tests need), then builds and runs the unit
   tests in a Go container: image pinned by digest in the script (overridable with `GO_IMAGE`; tags
   refused either way), `--network none --user <uid>:<gid> --cap-drop ALL --security-opt
   no-new-privileges --read-only --tmpfs /tmp:exec --pids-limit 512 --memory 1g`, `GOCACHE` inside the
