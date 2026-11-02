@@ -76,8 +76,14 @@ func TestInitAndCheckOnRealDaemon(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rep); err != nil || code != 0 || !rep.OK {
 		t.Fatalf("check --json: exit %d, ok %v, err %v\n%s", code, rep.OK, err, out)
 	}
-	if last := rep.Checks[len(rep.Checks)-1]; last.ID != "host.shared-mounts" || last.Status != "pass" {
-		t.Fatalf("shared-mounts: %+v", last)
+	found := false
+	for _, c := range rep.Checks {
+		if c.ID == "host.shared-mounts" {
+			found = c.Status == "pass"
+		}
+	}
+	if !found {
+		t.Fatalf("host.shared-mounts didn't pass: %+v", rep.Checks)
 	}
 }
 
@@ -87,7 +93,7 @@ type entry struct {
 	mtime time.Time
 }
 
-func snapshot(t *testing.T, root string) map[string]entry {
+func snapshot(t *testing.T, root, canaryDir string) map[string]entry {
 	t.Helper()
 	m := map[string]entry{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -98,7 +104,13 @@ func snapshot(t *testing.T, root string) map[string]entry {
 		if err != nil {
 			return err
 		}
-		m[p] = entry{fi.Mode(), fi.Size(), fi.ModTime()}
+		e := entry{fi.Mode(), fi.Size(), fi.ModTime()}
+		if p == canaryDir {
+			// The canary creates its run directory here and removes it again:
+			// the directory's mtime changes, its contents don't.
+			e.mtime = time.Time{}
+		}
+		m[p] = e
 		return nil
 	})
 	if err != nil {
@@ -110,11 +122,11 @@ func snapshot(t *testing.T, root string) map[string]entry {
 func TestCheckIsReadOnly(t *testing.T) {
 	s := newSandbox(t)
 	s.initialized(t)
-	before := snapshot(t, s.root)
+	before := snapshot(t, s.root, s.canaryDir())
 	if _, _, code := s.warden(t, "", "check"); code != 0 {
 		t.Fatalf("check: exit %d", code)
 	}
-	after := snapshot(t, s.root)
+	after := snapshot(t, s.root, s.canaryDir())
 	for p, e := range after {
 		if b, ok := before[p]; !ok || b != e {
 			t.Errorf("check changed %s", p)
