@@ -34,7 +34,9 @@ func runCLI(t *testing.T, args ...string) result {
 	return runWith(t, nil, nil, args...)
 }
 
-var allCommands = []string{"version", "init", "check", "up", "down", "status", "logs", "proxy"}
+var allCommands = []string{"version", "init", "check", "up", "down", "status", "logs", "proxy", "probe"}
+
+var hiddenCommands = map[string]bool{"proxy": true, "probe": true}
 
 func TestMainHelp(t *testing.T) {
 	for _, arg := range []string{"--help", "-h", "-help"} {
@@ -47,10 +49,10 @@ func TestMainHelp(t *testing.T) {
 		}
 		for _, name := range allCommands {
 			listed := strings.Contains(r.stdout, "\n  "+name+" ")
-			if name == "proxy" && listed {
-				t.Errorf("proxy must not be listed in the main help")
+			if hiddenCommands[name] && listed {
+				t.Errorf("%s must not be listed in the main help", name)
 			}
-			if name != "proxy" && !listed {
+			if !hiddenCommands[name] && !listed {
 				t.Errorf("%s missing from the main help", name)
 			}
 		}
@@ -232,6 +234,10 @@ func TestRootIsRefused(t *testing.T) {
 	r := runWith(t, map[string]string{"WARDEN_ROLE": "proxy"}, nil, "proxy")
 	if r.code != ExitFail || !strings.Contains(r.stderr, "refusing to run as root") {
 		t.Errorf("proxy as root: got %+v", r)
+	}
+	r = runWith(t, map[string]string{"WARDEN_ROLE": "canary"}, nil, "probe")
+	if r.code != ExitFail || !strings.Contains(r.stderr, "refusing to run as root") {
+		t.Errorf("probe as root: got %+v", r)
 	}
 }
 

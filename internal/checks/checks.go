@@ -70,6 +70,7 @@ type Env struct {
 	Mode        Mode
 	EUID        int
 	UID         int
+	GID         int
 	Home        string
 	Dirs        paths.Dirs
 	Root        string // filesystem root for host files: "/" in production
@@ -83,6 +84,8 @@ type Env struct {
 	// NewRunner builds the docker runner (production: docker.New).
 	NewRunner func(docker.Options) (docker.Runner, error)
 	Ctx       context.Context
+	// Canary is what the canary touches on the host besides Docker.
+	Canary CanaryEnv
 }
 
 // Report is the outcome of a run, plus what init needs to pin the daemon.
@@ -138,6 +141,7 @@ func Run(env Env) *Report {
 		r.daemonPin()
 	}
 	r.sharedMounts()
+	r.canary()
 	return r.rep
 }
 

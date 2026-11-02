@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rviscuso/warden/internal/checks/checkstest"
 	"github.com/rviscuso/warden/internal/config"
 	"github.com/rviscuso/warden/internal/docker"
 	"github.com/rviscuso/warden/internal/docker/dockertest"
@@ -37,6 +38,7 @@ type host struct {
 	fake  *dockertest.Fake
 	stdin string
 	now   time.Time
+	cn    *checkstest.Canary
 }
 
 func newHost(t *testing.T) *host {
@@ -78,6 +80,7 @@ func (h *host) script(id string) {
 	h.fake.On([]string{"info", "--format", "{{json .}}"}, dockertest.Response{Stdout: `{"ID":"` + id + `","CgroupVersion":"2","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin"]}`})
 	h.fake.On([]string{"version", "--format", "{{json .}}"}, dockertest.Response{Stdout: `{"Server":{"Version":"29.1.3","Components":[{"Name":"runc","Version":"1.4.0"},{"Name":"containerd","Version":"2.2.2"}]}}`})
 	h.fake.On([]string{"ps", "-aq", "--no-trunc"}, dockertest.Response{})
+	h.cn = checkstest.Script(h.t, h.fake, h.root, filepath.Join(h.stateDir(), "canary"), exampleRuntimeImage)
 }
 
 func (h *host) configDir() string { return filepath.Join(h.xdg["XDG_CONFIG_HOME"], "warden") }
@@ -106,15 +109,21 @@ func (h *host) run(args ...string) result {
 		buildInfo: func() (*debug.BuildInfo, bool) {
 			return &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-test"}}, true
 		},
-		geteuid:     func() int { return os.Geteuid() },
-		getuid:      os.Getuid,
-		home:        func() (string, error) { return h.home, nil },
-		now:         func() time.Time { return h.now },
-		root:        filepath.Join(h.root, "hostfs"),
-		goos:        "linux",
-		goarch:      "amd64",
-		dockerPaths: []string{filepath.Join(h.root, "bin/docker")},
-		newRunner:   func(docker.Options) (docker.Runner, error) { return h.fake, nil },
+		geteuid:      func() int { return os.Geteuid() },
+		getuid:       os.Getuid,
+		getgid:       os.Getgid,
+		home:         func() (string, error) { return h.home, nil },
+		now:          func() time.Time { return h.now },
+		root:         filepath.Join(h.root, "hostfs"),
+		goos:         "linux",
+		goarch:       "amd64",
+		dockerPaths:  []string{filepath.Join(h.root, "bin/docker")},
+		newRunner:    func(docker.Options) (docker.Runner, error) { return h.fake, nil },
+		executable:   func() (string, error) { return h.cn.Executable, nil },
+		resolver:     h.cn.Net,
+		dialer:       h.cn.Net,
+		canaryListen: h.cn.Net.Listen,
+		rand:         checkstest.ZeroReader{},
 		// Fixture system dirs: t.TempDir() may be under /tmp (see checks tests).
 		systemDirs: []string{filepath.Join(h.root, "hostfs/etc")},
 	}
