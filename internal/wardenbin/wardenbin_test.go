@@ -4,39 +4,19 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"debug/elf"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rviscuso/warden/internal/wardenbin/wardenbintest"
 )
 
-// makeELF builds a minimal ELF64 executable header with one PT_LOAD, and a
-// PT_INTERP if interp is set.
 func makeELF(t *testing.T, machine elf.Machine, interp bool, typ elf.Type) []byte {
 	t.Helper()
-	nprog := 1
-	if interp {
-		nprog = 2
-	}
-	var b bytes.Buffer
-	h := elf.Header64{
-		Type: uint16(typ), Machine: uint16(machine), Version: uint32(elf.EV_CURRENT),
-		Phoff: 64, Ehsize: 64, Phentsize: 56, Phnum: uint16(nprog),
-	}
-	copy(h.Ident[:], elf.ELFMAG)
-	h.Ident[elf.EI_CLASS] = byte(elf.ELFCLASS64)
-	h.Ident[elf.EI_DATA] = byte(elf.ELFDATA2LSB)
-	h.Ident[elf.EI_VERSION] = byte(elf.EV_CURRENT)
-	binary.Write(&b, binary.LittleEndian, h)
-	binary.Write(&b, binary.LittleEndian, elf.Prog64{Type: uint32(elf.PT_LOAD), Flags: uint32(elf.PF_R | elf.PF_X)})
-	if interp {
-		binary.Write(&b, binary.LittleEndian, elf.Prog64{Type: uint32(elf.PT_INTERP), Flags: uint32(elf.PF_R)})
-	}
-	b.WriteString("payload")
-	return b.Bytes()
+	return wardenbintest.ELF(machine, typ, interp)
 }
 
 func writeExe(t *testing.T, data []byte) string {
