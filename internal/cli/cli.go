@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/rviscuso/warden/internal/canary"
+	"github.com/rviscuso/warden/internal/controller"
 	"github.com/rviscuso/warden/internal/docker"
 	"github.com/rviscuso/warden/internal/netx"
 	"github.com/rviscuso/warden/internal/proxy"
@@ -49,6 +50,7 @@ type env struct {
 	getgid      func() int
 	home        func() (string, error)
 	now         func() time.Time
+	sleep       func(time.Duration)
 	root        string // filesystem root for host files
 	goos        string
 	goarch      string
@@ -84,6 +86,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		getgid:      os.Getgid,
 		home:        os.UserHomeDir,
 		now:         time.Now,
+		sleep:       time.Sleep,
 		root:        "/",
 		goos:        runtime.GOOS,
 		goarch:      runtime.GOARCH,
@@ -136,7 +139,7 @@ func commands() []*command {
 			name:    "init",
 			args:    "[--json]",
 			summary: "Run the checks and, on success, pin the daemon",
-			detail:  "Create Warden's directories, run every check, and on success pin the daemon in Warden's state. Re-pinning to a different daemon asks for approval. (The canary arrives in milestone 4.)",
+			detail:  "Create Warden's directories, run every check, and on success pin the daemon in Warden's state. Re-pinning to a different daemon asks for approval.",
 			define:  jsonCommand(runInit),
 		},
 		{
@@ -150,20 +153,20 @@ func commands() []*command {
 			name:    "up",
 			summary: "Start the egress proxy and the controller (asks y/N)",
 			detail:  "Generate the compose file, show it with a diff against the last applied one, and start the proxy and the controller after approval.",
-			define:  plainNotImplemented("up"),
+			define:  defineUp,
 		},
 		{
 			name:    "down",
 			summary: "Stop and remove the proxy and the controller",
 			detail:  "Stop and remove Warden's containers and networks. The agent home and the workspace are kept.",
-			define:  plainNotImplemented("down"),
+			define:  defineDown,
 		},
 		{
 			name:    "status",
 			args:    "[--json]",
 			summary: "Show the daemon pin, container states and Remote Control URL",
 			detail:  "Show the daemon pin, container states, images, start times and the last Remote Control URL.",
-			define:  jsonNotImplemented("status"),
+			define:  jsonCommand(runStatus),
 		},
 		{
 			name:    "logs",
@@ -182,7 +185,8 @@ func commands() []*command {
 					if *n <= 0 {
 						return usageError(e, "logs", "-n must be positive")
 					}
-					return notImplemented(e, "logs")
+					which := pos[0]
+					return runController(e, "logs", func(ce controller.Env) error { return controller.Logs(ce, which, *n) })
 				}
 			},
 		},
@@ -203,29 +207,6 @@ func commands() []*command {
 			define:  defineProbe,
 		},
 	}
-}
-
-func jsonNotImplemented(name string) func(*flag.FlagSet) func(*env, []string) int {
-	return func(fs *flag.FlagSet) func(*env, []string) int {
-		fs.Bool("json", false, "print results as JSON")
-		return plainNotImplemented(name)(nil)
-	}
-}
-
-func plainNotImplemented(name string) func(*flag.FlagSet) func(*env, []string) int {
-	return func(*flag.FlagSet) func(*env, []string) int {
-		return func(e *env, pos []string) int {
-			if len(pos) > 0 {
-				return usageError(e, name, "unexpected arguments: "+strings.Join(pos, " "))
-			}
-			return notImplemented(e, name)
-		}
-	}
-}
-
-func notImplemented(e *env, name string) int {
-	fmt.Fprintf(e.stderr, "warden %s: not implemented\n", name)
-	return ExitFail
 }
 
 func findCommand(name string) *command {

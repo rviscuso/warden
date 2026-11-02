@@ -115,6 +115,7 @@ func (h *host) run(args ...string) result {
 		getgid:       os.Getgid,
 		home:         func() (string, error) { return h.home, nil },
 		now:          func() time.Time { return h.now },
+		sleep:        func(time.Duration) {},
 		root:         filepath.Join(h.root, "hostfs"),
 		goos:         "linux",
 		goarch:       "amd64",

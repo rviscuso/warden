@@ -110,20 +110,6 @@ func TestUnknownFlagIsUsageError(t *testing.T) {
 	}
 }
 
-func TestNotImplemented(t *testing.T) {
-	cases := [][]string{
-		{"up"}, {"down"},
-		{"status"}, {"status", "--json"},
-		{"logs", "proxy"}, {"logs", "controller", "-n", "5"}, {"logs", "-n", "5", "proxy"},
-	}
-	for _, args := range cases {
-		r := runCLI(t, args...)
-		if r.code != ExitFail || r.stdout != "" || r.stderr != "warden "+args[0]+": not implemented\n" {
-			t.Errorf("%v: got %+v", args, r)
-		}
-	}
-}
-
 func TestUnexpectedArgumentsAreUsageErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"version", "x"}, {"init", "x"}, {"check", "x"}, {"up", "x"}, {"down", "x"}, {"status", "x"},
