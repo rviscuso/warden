@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/rviscuso/warden/internal/compose"
+	"github.com/rviscuso/warden/internal/controller"
 	"github.com/rviscuso/warden/internal/hardening"
 )
 
@@ -25,9 +26,9 @@ const (
 	// sandbox has no route out. Nothing is sent to it.
 	RouteControl = "1.1.1.1:443"
 
-	BinaryTarget = "/warden"
+	BinaryTarget = controller.BinaryTarget
 	MountTarget  = "/canary"
-	ProxyPort    = "3128"
+	ProxyPort    = controller.ProxyPort
 )
 
 // ProjectParams are the canary's inputs.
@@ -63,33 +64,23 @@ func Project(p ProjectParams) (compose.File, error) {
 	if err != nil {
 		return compose.File{}, err
 	}
-	proxyH, err := hardening.Settings(p.UID, p.GID, hardening.ProxyResources, p.Host)
-	if err != nil {
-		return compose.File{}, err
-	}
 	canaryH, err := hardening.Settings(p.UID, p.GID, p.Resources, p.Host)
 	if err != nil {
 		return compose.File{}, err
 	}
-	bin := compose.BindMount(p.Binary, BinaryTarget, true)
-	proxyCmd := []string{"proxy", "--listen", ":" + ProxyPort}
-	for _, a := range p.Allow {
-		proxyCmd = append(proxyCmd, "--allow", a)
+	// The proxy exactly as up runs it: the same function builds both.
+	proxy, err := controller.ProxyService(controller.ProxyParams{
+		UID: p.UID, GID: p.GID, ContainerName: ProxyName,
+		RuntimeImage: p.RuntimeImage, Binary: p.Binary, Allow: p.Allow, Host: p.Host,
+	})
+	if err != nil {
+		return compose.File{}, err
 	}
-	proxyCmd = append(proxyCmd, "--ports", "443")
+	bin := compose.BindMount(p.Binary, BinaryTarget, true)
 	return compose.File{
 		Name: ProjectName,
 		Services: map[string]compose.Service{
-			"proxy": {
-				Fields:        proxyH,
-				ContainerName: ProxyName,
-				Image:         p.RuntimeImage,
-				Entrypoint:    []string{BinaryTarget},
-				Command:       proxyCmd,
-				Environment:   map[string]string{"WARDEN_ROLE": "proxy"},
-				Networks:      []string{"sandbox", "egress"},
-				Volumes:       []compose.Bind{bin},
-			},
+			"proxy": proxy,
 			"canary": {
 				Fields:        canaryH,
 				ContainerName: CanaryName,
