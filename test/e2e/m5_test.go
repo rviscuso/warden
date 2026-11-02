@@ -77,12 +77,18 @@ func TestControllerImage(t *testing.T) {
 		return strings.TrimSpace(string(out) + string(errOut)), code
 	}
 
-	version := regexp.MustCompile(`\d+\.\d+\.\d+`)
-	for _, tool := range [][]string{{"claude", "--version"}, {"git", "--version"}, {"rg", "--version"}, {"less", "--version"}, {"ps", "--version"}} {
-		out, code := run(true, tool[0], tool[1:]...)
-		t.Logf("%s: exit %d: %s", tool[0], code, firstLine(out))
-		if code != 0 || !version.MatchString(out) {
-			t.Errorf("%s %s as %s, read-only, no capabilities: exit %d: %s", tool[0], tool[1], user, code, out)
+	// Each tool's own version format: less, for one, has a single number.
+	for _, tool := range []struct{ cmd, want string }{
+		{"claude", `^\d+\.\d+\.\d+ \(Claude Code\)`},
+		{"git", `^git version \d+\.\d+`},
+		{"rg", `^ripgrep \d+\.\d+`},
+		{"less", `^less \d+`},
+		{"ps", `^ps from procps-ng \d+\.\d+`},
+	} {
+		out, code := run(true, tool.cmd, "--version")
+		t.Logf("%s: exit %d: %s", tool.cmd, code, firstLine(out))
+		if code != 0 || !regexp.MustCompile(tool.want).MatchString(firstLine(out)) {
+			t.Errorf("%s --version as %s, read-only, no capabilities: exit %d: %s (want %s)", tool.cmd, user, code, firstLine(out), tool.want)
 		}
 	}
 
