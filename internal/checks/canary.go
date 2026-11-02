@@ -21,6 +21,7 @@ import (
 	"github.com/rviscuso/warden/internal/compose"
 	"github.com/rviscuso/warden/internal/hardening"
 	"github.com/rviscuso/warden/internal/paths"
+	"github.com/rviscuso/warden/internal/state"
 	"github.com/rviscuso/warden/internal/wardenbin"
 )
 
@@ -73,6 +74,9 @@ func (r *run) canary() {
 			return
 		}
 	}
+	// From here on the canary runs: whatever happens, its record is updated
+	// (set if every check passes, cleared otherwise).
+	r.rep.CanaryRan = true
 	ctx, cancel := context.WithTimeout(r.env.Ctx, CanaryTimeout)
 	defer cancel()
 	cfg := r.rep.Config
@@ -104,6 +108,16 @@ func (r *run) canary() {
 		r.fail(idCleanup, "Canary removed", oneLine(cleanupErr), errFix(cleanupErr))
 	} else {
 		r.pass(idCleanup, "Canary removed", "containers, networks and the run directory removed")
+	}
+
+	// The record up requires: only if every canary check passed or warned.
+	for _, res := range r.rep.Results {
+		if strings.HasPrefix(res.ID, "canary.") && res.Status == Fail {
+			return
+		}
+	}
+	r.rep.CanaryPass = &state.CanaryPass{
+		DaemonID: r.rep.Daemon.ID, BinarySHA256: c.binSHA, HardeningSHA256: c.digest, At: r.env.now().UTC(),
 	}
 }
 
@@ -143,6 +157,9 @@ type canaryRun struct {
 	created    bool   // compose create was attempted
 	containers []string
 	networks   []string
+
+	// What a passing run records (state.CanaryPass).
+	binSHA, digest string
 }
 
 func (c *canaryRun) env() CanaryEnv {
@@ -191,6 +208,7 @@ func (c *canaryRun) run() ([]canary.Verdict, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.binSHA = strings.TrimPrefix(filepath.Base(bin), "warden-")
 
 	// Leftovers from a crashed run fail; they are never removed for you.
 	if err := c.noLeftovers(); err != nil {
@@ -231,6 +249,9 @@ func (c *canaryRun) run() ([]canary.Verdict, error) {
 		return nil, err
 	}
 	hostH := hardening.Host{MPTCP: mptcp}
+	if c.digest, err = hardening.Digest(r.env.UID, r.env.GID, resources, hostH); err != nil {
+		return nil, err
+	}
 	f, err := canary.Project(canary.ProjectParams{
 		UID: r.env.UID, GID: r.env.GID, RuntimeImage: cfg.RuntimeImage, Binary: bin, MountDir: mnt,
 		Allow: cfg.Egress.Allow, Resources: resources, Host: hostH,

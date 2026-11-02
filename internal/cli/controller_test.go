@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rviscuso/warden/internal/checks/checkstest"
 	"github.com/rviscuso/warden/internal/controller"
 	"github.com/rviscuso/warden/internal/docker/dockertest"
+	"github.com/rviscuso/warden/internal/state"
 )
 
 var (
@@ -279,7 +281,7 @@ func TestUpChecksThePin(t *testing.T) {
 	h := upHost(t)
 	h.script(otherID)
 	r := h.run("up")
-	if r.code != ExitFail || !strings.Contains(r.stderr, "daemon changed") || !strings.Contains(r.stderr, "fix: daemon changed; re-run init") {
+	if r.code != ExitFail || !strings.Contains(r.stdout+r.stderr, "daemon changed") || !strings.Contains(r.stdout+r.stderr, "fix: daemon changed; re-run init") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 	for _, c := range h.fake.Calls {
@@ -295,7 +297,7 @@ func TestUpRevalidatesWorkspace(t *testing.T) {
 	cfg, _ := os.ReadFile(cfgFile)
 	os.WriteFile(cfgFile, []byte(strings.Replace(string(cfg), `"`+h.ws+`"`, `"`+h.home+`"`, 1)), 0o600)
 	r := h.run("up")
-	if r.code != ExitFail || !strings.Contains(r.stderr, "workspace") || strings.Contains(r.stderr, "Apply?") {
+	if r.code != ExitFail || !strings.Contains(r.stdout+r.stderr, "workspace") || strings.Contains(r.stdout+r.stderr, "Apply?") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 }
@@ -304,7 +306,7 @@ func TestUpNeedsInitsBinary(t *testing.T) {
 	h := upHost(t)
 	os.RemoveAll(filepath.Join(h.stateDir(), "bin"))
 	r := h.run("up")
-	if r.code != ExitFail || !strings.Contains(r.stderr, "run warden init") {
+	if r.code != ExitFail || !strings.Contains(r.stdout+r.stderr, "run warden init") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 }
@@ -313,7 +315,7 @@ func TestBeforeInit(t *testing.T) {
 	for _, args := range [][]string{{"up"}, {"down"}, {"status"}, {"status", "--json"}, {"logs", "proxy"}} {
 		h := newHost(t)
 		r := h.run(args...)
-		if r.code != ExitFail || !strings.Contains(r.stderr, "fix: run warden init") {
+		if r.code != ExitFail || !strings.Contains(r.stdout+r.stderr, "warden init") {
 			t.Errorf("%v: %d\n%s", args, r.code, r.stderr)
 		}
 		if len(h.fake.Calls) != 0 {
@@ -415,7 +417,11 @@ func TestUpRefusesAnotherSocket(t *testing.T) {
 	os.WriteFile(cfgFile, []byte(strings.Replace(string(cfg), `"`+h.sock+`"`, `"/run/other.sock"`, 1)), 0o600)
 	for _, cmd := range [][]string{{"up"}, {"down"}, {"status"}, {"logs", "proxy"}} {
 		r := h.run(cmd...)
-		if r.code != ExitFail || !strings.Contains(r.stderr, "is not the pinned socket "+h.sock) {
+		want := "is not the pinned socket " + h.sock
+		if cmd[0] == "up" {
+			want = "/run/other.sock" // up's checks: that socket doesn't exist here, so host.docker-access fails first
+		}
+		if r.code != ExitFail || !strings.Contains(r.stdout+r.stderr, want) {
 			t.Errorf("%v: %d\n%s", cmd, r.code, r.stderr)
 		}
 	}
@@ -429,6 +435,18 @@ func TestUpRefusesAnotherSocket(t *testing.T) {
 func TestUpHostWithoutMPTCP(t *testing.T) {
 	h := upHost(t)
 	os.RemoveAll(filepath.Join(h.root, "hostfs/proc/sys/net/mptcp"))
+	// The canary record from upHost's init was for a host with MPTCP: up
+	// refuses until a canary passes on this one.
+	if r := h.run("up"); r.code != ExitFail || !strings.Contains(r.stdout, "hardening settings") {
+		t.Fatalf("stale record: %d\n%s", r.code, r.stdout)
+	}
+	h.fake.On(checkstest.ArgsLogsC, dockertest.Response{Stdout: h.cn.ProbeOutput(map[string]string{"mptcp": "absent", "mptcp_socket": "eprotonosupport"})})
+	os.MkdirAll(filepath.Join(h.stateDir(), "docker-config"), 0o700) // the real runner creates it
+	h.stdin = ""
+	if r := h.run("check"); r.code != ExitOK {
+		t.Fatalf("check: %d\n%s", r.code, r.stdout)
+	}
+	h.stdin = "y\n"
 	if r := h.run("up"); r.code != ExitOK {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
@@ -445,7 +463,7 @@ func TestUpMPTCPUnknownFailsClosed(t *testing.T) {
 	os.RemoveAll(net)
 	os.WriteFile(net, nil, 0o644) // ENOTDIR
 	r := h.run("up")
-	if r.code != ExitFail || !strings.Contains(r.stderr, "cannot tell whether the kernel has MPTCP") || strings.Contains(r.stderr, "Apply?") {
+	if r.code != ExitFail || !strings.Contains(r.stdout+r.stderr, "cannot tell whether the kernel has MPTCP") || strings.Contains(r.stdout+r.stderr, "Apply?") {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 }
@@ -502,5 +520,86 @@ func TestUpIncidentStopFails(t *testing.T) {
 	}
 	if c := h.loadState().Controller; c.Incident == "" {
 		t.Fatal("incident not recorded")
+	}
+}
+
+// TestUpNeedsCanaryRecord: without a recorded canary pass, up refuses
+// before showing anything; warden check records one.
+func TestUpNeedsCanaryRecord(t *testing.T) {
+	h := upHost(t)
+	s := h.loadState()
+	if s.CanaryPass == nil {
+		t.Fatal("init recorded no canary pass")
+	}
+	s.CanaryPass = nil
+	state.Save(h.stateFile(), s)
+	r := h.run("up")
+	if r.code != ExitFail || !strings.Contains(r.stdout, "fail    canary.recorded") || !strings.Contains(r.stdout, "fix: run warden check") ||
+		strings.Contains(r.stderr, "Apply?") {
+		t.Fatalf("%d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	os.MkdirAll(filepath.Join(h.stateDir(), "docker-config"), 0o700) // the real runner creates it
+	h.stdin = ""
+	if r := h.run("check"); r.code != ExitOK || h.loadState().CanaryPass == nil {
+		t.Fatalf("check: %d\n%s", r.code, r.stdout)
+	}
+	h.stdin = "y\n"
+	if r := h.run("up"); r.code != ExitOK {
+		t.Fatalf("up after check: %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+}
+
+// TestUpRefusesUnprovenSettings: settings the canary didn't prove (here,
+// other resources) make up refuse until check proves them.
+func TestUpRefusesUnprovenSettings(t *testing.T) {
+	h := upHost(t)
+	cfgFile := filepath.Join(h.configDir(), "config.json")
+	cfg, _ := os.ReadFile(cfgFile)
+	os.WriteFile(cfgFile, []byte(strings.Replace(string(cfg), `"memory_mb": 1536`, `"memory_mb": 2048`, 1)), 0o600)
+	r := h.run("up")
+	if r.code != ExitFail || !strings.Contains(r.stdout, "the canary pass doesn't match: hardening settings") {
+		t.Fatalf("%d\n%s", r.code, r.stdout)
+	}
+	if h.called("compose", "-p", "warden", "-f", h.composeFile(), "up", "-d") {
+		t.Fatal("compose up ran")
+	}
+}
+
+// TestUpRunsSharedMounts: up runs every non-canary check each time; a
+// container sharing the workspace stops it. It never runs the canary.
+func TestUpRunsSharedMounts(t *testing.T) {
+	h := upHost(t)
+	other := strings.Repeat("9", 64)
+	h.fake.On([]string{"ps", "-aq", "--no-trunc"}, dockertest.Response{Stdout: other + "\n"})
+	h.fake.On([]string{"inspect", "--type", "container", other},
+		dockertest.Response{Stdout: `[{"Id":"` + other + `","Name":"/sharer","Mounts":[{"Type":"bind","Source":"` + h.ws + `","Destination":"/w"}]}]`})
+	creates := countCalls(h, checkstest.ArgsCreate...)
+	r := h.run("up")
+	if r.code != ExitFail || !strings.Contains(r.stdout, "fail    host.shared-mounts") || !strings.Contains(r.stdout, "container sharer") {
+		t.Fatalf("%d\n%s", r.code, r.stdout)
+	}
+	if countCalls(h, checkstest.ArgsCreate...) != creates {
+		t.Fatal("up ran the canary")
+	}
+}
+
+// TestCheckWithdrawsRecordOnFailure: a canary that runs and fails removes
+// the earlier pass, so up can't start containers on its strength.
+func TestCheckWithdrawsRecordOnFailure(t *testing.T) {
+	for _, cmd := range []string{"check", "init"} {
+		h := upHost(t)
+		os.MkdirAll(filepath.Join(h.stateDir(), "docker-config"), 0o700)
+		h.fake.On(checkstest.ArgsLogsC, dockertest.Response{Stdout: h.cn.ProbeOutput(map[string]string{"caps_bnd": "00000000a80425fb"})})
+		h.stdin = ""
+		if r := h.run(cmd); r.code != ExitFail {
+			t.Fatalf("%s: %d", cmd, r.code)
+		}
+		if p := h.loadState().CanaryPass; p != nil {
+			t.Errorf("%s: record kept after a failing canary: %+v", cmd, p)
+		}
+		h.stdin = "y\n"
+		if r := h.run("up"); r.code != ExitFail || !strings.Contains(r.stdout, "no canary pass recorded") {
+			t.Errorf("%s: up after a failing canary: %d\n%s", cmd, r.code, r.stdout)
+		}
 	}
 }

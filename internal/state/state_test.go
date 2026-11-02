@@ -167,3 +167,30 @@ func TestControllerRejects(t *testing.T) {
 		t.Fatal("nil controller running")
 	}
 }
+
+func TestCanaryPass(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	s := sample()
+	s.CanaryPass = &CanaryPass{DaemonID: "d", BinarySHA256: strings.Repeat("a", 64), HardeningSHA256: strings.Repeat("b", 64), At: time.Now().UTC()}
+	if err := Save(p, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || *got.CanaryPass != *s.CanaryPass {
+		t.Fatalf("%+v %v", got.CanaryPass, err)
+	}
+	for name, fn := range map[string]func(c *CanaryPass){
+		"no daemon":  func(c *CanaryPass) { c.DaemonID = "" },
+		"short bin":  func(c *CanaryPass) { c.BinarySHA256 = "abc" },
+		"upper hash": func(c *CanaryPass) { c.HardeningSHA256 = strings.Repeat("B", 64) },
+		"no time":    func(c *CanaryPass) { c.At = time.Time{} },
+	} {
+		bad := *s.CanaryPass
+		fn(&bad)
+		s2 := sample()
+		s2.CanaryPass = &bad
+		if err := Save(filepath.Join(t.TempDir(), "state.json"), s2); err == nil {
+			t.Errorf("%s: saved", name)
+		}
+	}
+}

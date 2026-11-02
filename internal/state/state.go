@@ -21,7 +21,8 @@ type State struct {
 	WardenVersion string      `json:"warden_version"`
 	Daemon        Daemon      `json:"daemon"`
 	InitializedAt time.Time   `json:"initialized_at"`
-	Controller    *Controller `json:"controller,omitempty"` // set by up
+	Controller    *Controller `json:"controller,omitempty"`  // set by up
+	CanaryPass    *CanaryPass `json:"canary_pass,omitempty"` // set by init and check; up requires it
 }
 
 // Daemon is the pinned daemon and the versions seen when it was pinned.
@@ -32,6 +33,31 @@ type Daemon struct {
 	Runc          string `json:"runc"`
 	Containerd    string `json:"containerd"`
 	Compose       string `json:"compose"`
+}
+
+// CanaryPass records a canary run in which every canary check passed: on
+// which daemon, with which warden binary and which hardening settings. up
+// starts containers only if all three still match.
+type CanaryPass struct {
+	DaemonID        string    `json:"daemon_id"`
+	BinarySHA256    string    `json:"binary_sha256"`
+	HardeningSHA256 string    `json:"hardening_sha256"`
+	At              time.Time `json:"at"`
+}
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// Validate checks the record's fields.
+func (p *CanaryPass) Validate() error {
+	switch {
+	case p.DaemonID == "":
+		return errors.New("state: canary_pass.daemon_id is empty")
+	case !sha256Hex.MatchString(p.BinarySHA256) || !sha256Hex.MatchString(p.HardeningSHA256):
+		return errors.New("state: canary_pass hashes must be 64 hex characters")
+	case p.At.IsZero():
+		return errors.New("state: canary_pass.at is missing")
+	}
+	return nil
 }
 
 // Controller is what up applied: the exact compose bytes, the containers
@@ -89,6 +115,11 @@ func (s *State) Validate() error {
 		return fmt.Errorf("state: daemon.socket %q is not an absolute path", s.Daemon.Socket)
 	case s.InitializedAt.IsZero():
 		return errors.New("state: initialized_at is missing")
+	}
+	if s.CanaryPass != nil {
+		if err := s.CanaryPass.Validate(); err != nil {
+			return err
+		}
 	}
 	if s.Controller != nil {
 		return s.Controller.Validate()
