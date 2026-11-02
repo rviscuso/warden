@@ -17,10 +17,12 @@ warden down                         stop and remove them (agent home and workspa
 warden status   [--json]            daemon pin, container states, Remote Control URL
 warden logs     proxy|controller [-n N]
 warden proxy    [flags]             the egress proxy itself; runs inside the proxy container
+warden probe    [flags]             the canary probe; runs inside the canary container
 ```
 
 `warden proxy` is internal: it isn't listed in the main help, and it refuses to run unless
-`WARDEN_ROLE=proxy` is set (Warden sets it in the proxy container).
+`WARDEN_ROLE=proxy` is set (Warden sets it in the proxy container). `warden probe` is the same with
+`WARDEN_ROLE=canary`.
 
 Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
 
@@ -62,9 +64,12 @@ Resolved with the XDG base-directory rules (`$XDG_CONFIG_HOME`, `$XDG_STATE_HOME
 | Purpose | Default | Agent can write? |
 |---|---|---|
 | Config | `~/.config/warden/config.json` | No, never mountable |
-| State | `~/.local/state/warden/` (`state.json`, `compose/`, `docker-config/`) | No, never mountable |
+| State | `~/.local/state/warden/` (`state.json`, `compose/`, `docker-config/`, `bin/`, `canary/`, `canary.lock`) | No: never mounted itself (see below) |
 | Agent homes | `~/.local/share/warden/agents/<name>/` | Yes: mounted as the agent's `$HOME` |
 
+- The state directory is never mounted. Only two kinds of path under it are: `<state>/bin/warden-<sha256>`
+  (mode 0500, verified by hash after copying, mounted read-only, and only into the proxy and the
+  canary, never the controller) and `<state>/canary/<random>/` (canary only, removed after every run).
 - A relative `XDG_*` value is ignored (per the XDG spec) and the default is used.
 - `internal/paths` only works out locations; it creates nothing.
 - Commands that need a directory create it (`init`; the Docker runner for `docker-config/`).
@@ -85,6 +90,9 @@ internal/docker/       Runner interface + exec implementation with a sanitized e
 internal/hardening/    THE single source of container hardening, used by every container
 internal/checks/       host, daemon and canary checks; a Result per check
 internal/proxy/        the egress proxy: allowlist, CONNECT handling, connection log
+internal/compose/      typed compose file, Render (the only producer of compose JSON) and Validate
+internal/canary/       the in-container probe (warden probe), its output format, the canary project
+internal/wardenbin/    copy and verify the warden binary under <state>/bin/
 internal/controller/   compose generation, up/down/status/logs, post-start verification, RC URL
 images/controller/     reference controller image (Dockerfile only)
 ```
@@ -203,6 +211,28 @@ A unit test asserts that no code path can produce `privileged`, any `cap_add`, `
 
 Note: `read_only` may break an image that writes outside its mounts. If the controller image can't
 run read-only, stop and ask; don't silently turn it off.
+
+Precisely:
+
+- `hardening.Settings(uid, gid, resources)` returns a typed set of compose service fields, and it is
+  the only producer of them: `user: "<uid>:<gid>"` (UID 0 and GID 0 are refused), `cap_drop: [ALL]`,
+  `security_opt: ["no-new-privileges:true"]`, `read_only: true`,
+  `tmpfs: ["/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777"]` (exec allowed: the agent runs builds and
+  tests from `/tmp`, and `noexec` adds nothing when the workspace is writable and executable),
+  `mem_limit` and `memswap_limit` both the memory limit (no swap), `cpus`, `pids_limit`,
+  `init: true`, and, so daemon defaults (`default-ipc-mode`, `default-cgroupns-mode`) can't weaken
+  them, `ipc: private` and `cgroup: private`; plus `restart: "no"` and `pull_policy: never`.
+  Seccomp and AppArmor are left at Docker's defaults, not named: naming `apparmor=docker-default`
+  would stop containers starting on a host without AppArmor. The canary verifies both.
+- Resources: the controller and the canary use `controller.resources`; the proxy uses constants,
+  256 MiB, 0.5 CPU and 128 PIDs.
+- Compose files are produced only by `compose.Render` (`internal/compose`), which marshals the typed
+  file and then runs `compose.Validate` on the bytes it will hand to Docker. The typed service has no
+  field for privileged mode, capabilities to add, devices, host namespaces, ports or arbitrary
+  volumes. `Validate` checks the rendered JSON against an allowlist of keys and the exact hardened
+  values above, refuses `user` 0 or empty, and refuses any bind mount whose source is, is inside, or
+  contains the Docker socket. Each rule has a failing test.
+- Every service runs with an explicit `entrypoint`, so an image's own entrypoint never wraps it.
 
 ## Networks
 
@@ -372,26 +402,68 @@ cgroup v1, no AppArmor, unreachable.
 - Warden creates temporary `warden-canary-sandbox` (internal) and `warden-canary-egress` networks,
   starts a temporary proxy exactly as `up` would (allowlist from config), and starts the canary as the
   user's UID:GID with `hardening.Settings(...)` on the sandbox network, with a temporary directory from
-  Warden's state directory bind-mounted. One probe script prints `key=value` lines; Warden parses them.
+  Warden's state directory bind-mounted. One probe prints `key=value` lines; Warden parses them.
   Everything is always removed, even on failure.
+
+Precisely:
+
+- `runtime_image` may be `name@sha256:…` or a local image ID `sha256:…` (both are content
+  addresses). `canary.image` checks that it is local (`docker image inspect`); Warden never pulls
+  (every service has `pull_policy: never`). The fix is `docker pull <ref>` for a digest reference.
+- The canary runs only if every earlier check passed or warned; otherwise every `canary.*` check is
+  `not run: depends on <first failed check>`. If setup fails, every remaining `canary.*` check fails
+  with that error.
+- **The probe is `warden probe`**, a hidden subcommand that refuses to run unless
+  `WARDEN_ROLE=canary`. It runs from the same mounted binary as the proxy, so `runtime_image` needs
+  no shell and no `nc`. It only reports what it observes; Warden decides on the host. Its output is
+  strict: an unknown, missing or duplicate key fails the canary.
+- **The binary.** `init` copies the running binary (`os.Executable`) to `<state>/bin/warden-<sha256>`,
+  mode 0500, and verifies it by hash after copying; it must be a static ELF for the host's
+  architecture (no `PT_INTERP`). `check` creates nothing: it verifies that copy for the running
+  binary's hash, or fails with "run warden init".
+- **A compose project**, `warden-canary`, rendered by `compose.Render` and passed on stdin
+  (`docker compose -p warden-canary -f -`). Services `warden-canary-proxy` (both networks; the binary
+  read-only at `/warden`; `warden proxy --listen :3128 --allow … --ports 443`; proxy limits) and
+  `warden-canary` (sandbox network only; the binary read-only at `/warden` and
+  `<state>/canary/<random>/mnt` read-write at `/canary`; `controller.resources`). The names differ
+  from `up`'s, so the canary can run while Warden is up.
+- **One canary at a time:** `init` creates `<state>/canary.lock`; `init` and `check` take an
+  exclusive `flock` on it and fail at once if another run holds it. `check` fails with "run warden
+  init" if it is missing.
+- **Leftovers** from a crashed run (a container or network with a canary name) fail the canary
+  with the exact `docker rm -f …` / `docker network rm …` fix. They are never removed automatically:
+  anyone with Docker access can create a container with that name.
+- **Sequence:** create (networks and containers, not started); read the sandbox network's gateway
+  from `docker network inspect`; open the `no-host` listener; write the control file into the
+  mounted directory; start; `docker wait warden-canary`; read both containers' logs; stat the
+  owner file; tear down with `docker compose … down` (never `-v`), falling back to `docker rm -f`
+  and `docker network rm` by the recorded IDs; remove `<state>/canary/<random>/`. A failure to
+  remove anything is the `canary.cleanup` check, with the exact commands.
+- **Timeouts:** 90 s for the whole canary, cleanup included; the probe waits up to 10 s for the
+  control file and for the proxy port; each probe connection or lookup has 3 s.
+- `host.shared-mounts` runs before the canary and the canary is gone afterwards, so nothing is
+  skipped in M4.
 
 | ID | Assertion |
 |---|---|
+| canary.image | `runtime_image` is local; never pulled |
 | canary.caps | `CapEff` and `CapBnd` are `0000000000000000` |
 | canary.nnp | `NoNewPrivs` is `1` |
 | canary.seccomp | `Seccomp` is `2` |
-| canary.uid | `Uid` and `Gid` equal the user's |
-| canary.memory | `/sys/fs/cgroup/memory.max` equals the requested bytes |
+| canary.uid | `Uid` and `Gid` (all four fields) equal the user's, and there are no supplementary groups other than the GID |
+| canary.memory | `/sys/fs/cgroup/memory.max` equals the requested bytes and `memory.swap.max` is `0` |
 | canary.pids | `/sys/fs/cgroup/pids.max` equals the requested limit |
-| canary.cpu | `/sys/fs/cgroup/cpu.max` matches the requested quota |
+| canary.cpu | `/sys/fs/cgroup/cpu.max` matches the requested quota (period 100000, quota within 0.1% of `cpus` × period) |
 | canary.apparmor | `/proc/self/attr/current` is `docker-default (enforce)` (warn if the daemon has no AppArmor) |
-| canary.rootfs | Writing to `/` fails |
-| canary.no-route | A TCP connection to a public IP fails within a short timeout |
-| canary.no-dns | An outside hostname does not resolve |
-| canary.no-host | Warden opens a temporary TCP listener on the host on all addresses; a connection from the canary to the sandbox network's gateway on that port fails. Warden owns both ends, so the result doesn't depend on what else runs on the host |
-| canary.proxy-allow | `CONNECT` to the first allowlisted host through the proxy returns `200` |
-| canary.proxy-deny | `CONNECT` to a host not on the allowlist is refused |
+| canary.rootfs | Writing to `/` fails with `EROFS` |
+| canary.tmp | Writing to `/tmp` works, and `/tmp` is a `tmpfs` mounted `rw,nosuid,nodev` without `noexec` |
+| canary.no-route | A TCP connection to `1.1.1.1:443` fails within 3 s. Control: Warden first dials it from the host; if the host can't reach it, the check fails with "cannot prove: host has no route to the control address" |
+| canary.no-dns | The first allowlisted host doesn't resolve inside the sandbox. Control: the host must resolve it, or the check fails with "cannot prove" |
+| canary.no-host | Warden listens on the sandbox network's gateway IP (from `docker network inspect`), on a random port, only while the probe runs; the canary's connection must fail and the listener must receive nothing. If the host has no such address (`EADDRNOTAVAIL`), it passes with "host has no address on the sandbox network". No port is ever open on the LAN |
+| canary.proxy-allow | `CONNECT` to the first exact allowlist entry (or the domain of the first leading-dot entry) through the proxy returns `200` |
+| canary.proxy-deny | `CONNECT` to `warden-canary.invalid` returns `403`, and the proxy logged `host not allowed` for it |
 | canary.owner | A file the canary writes to the bind mount is owned by the user's UID and GID on the host |
+| canary.cleanup | Every canary container, network and directory was removed |
 
 ## Reference controller image (`images/controller/Dockerfile`)
 
@@ -486,6 +558,14 @@ on the host with Docker access, which is root-equivalent.
   fails. It also checks a deny and the log lines. The private-address test allows `localtest.me`, a
   public name that resolves to `127.0.0.1`, and expects the non-public-address refusal; if the name
   doesn't resolve only to loopback addresses at test time, it reports SKIP, never a pass.
+- The canary live tests run `warden init` and `warden check` with the real canary, using
+  `runtime_image` pinned in `scripts/e2e.sh` (overridable with `RUNTIME_IMAGE`, digest only), and
+  check afterwards that no canary container, network or directory is left. A **negative control**
+  runs `warden probe` in a deliberately unhardened `docker run` (no `--cap-drop`, no
+  `no-new-privileges`, writable root, as another non-root UID and GID) and requires `canary.caps`, `canary.nnp`,
+  `canary.rootfs` and `canary.uid` to fail, so the canary is shown not to pass vacuously. These tests
+  extend the exception above to their networks and containers, under the same rules: `warden-e2e-`
+  or canary names, always removed, never pulled, SKIP if the image isn.t local.
 
 ## Milestones (one pull request each, reviewed before the next starts)
 
