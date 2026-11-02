@@ -57,7 +57,7 @@ func parse(src string) ([]instruction, error) {
 }
 
 var (
-	digestFrom     = regexp.MustCompile(`^debian:bookworm-slim@sha256:[0-9a-f]{64} AS base$`)
+	digestFrom     = regexp.MustCompile(`^debian:trixie-slim@sha256:[0-9a-f]{64} AS base$`)
 	stageFrom      = regexp.MustCompile(`^(base|claude-amd64|claude-arm64|claude-\$\{TARGETARCH\})( AS [a-z0-9-]+)?$`)
 	claudeAdd      = regexp.MustCompile(`^--checksum=sha256:[0-9a-f]{64} --chmod=0755 https://downloads\.claude\.ai/claude-code-releases/(\d+\.\d+\.\d+)/(linux-x64|linux-arm64)/claude /usr/local/bin/claude$`)
 	numericNonRoot = regexp.MustCompile(`^([1-9][0-9]*):([1-9][0-9]*)$`)
@@ -95,7 +95,7 @@ func contract(src string) (problems []string) {
 		return []string{"empty Dockerfile"}
 	}
 	if ins[0].cmd != "FROM" || !digestFrom.MatchString(ins[0].args) {
-		bad("line %d: the first instruction must be FROM debian:bookworm-slim@sha256:<64 hex> AS base, got %s %s",
+		bad("line %d: the first instruction must be FROM debian:trixie-slim@sha256:<64 hex> AS base, got %s %s",
 			ins[0].line, ins[0].cmd, ins[0].args)
 	}
 	var lastUser, home, workdir string
@@ -188,7 +188,8 @@ func TestContractRefuses(t *testing.T) {
 	}
 	digest := "sha256:" + strings.Repeat("0", 64)
 	cases := map[string][2]string{
-		"base by tag":      {"debian:bookworm-slim@" + digest + " AS base", "debian:bookworm-slim AS base"},
+		"base by tag":      {"debian:trixie-slim@" + digest + " AS base", "debian:trixie-slim AS base"},
+		"older base":       {"debian:trixie-slim@", "debian:bookworm-slim@"},
 		"other base":       {"FROM base AS claude-amd64", "FROM ubuntu:24.04 AS claude-amd64"},
 		"user root":        {"USER 65534:65534", "USER root"},
 		"user 0":           {"USER 65534:65534", "USER 0:0"},

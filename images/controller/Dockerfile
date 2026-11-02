@@ -15,10 +15,11 @@
 # No "# syntax=" line: that would pull a Dockerfile frontend image. ADD
 # --checksum and --chmod need Docker's built-in BuildKit (Engine 25+).
 
-# PLACEHOLDER: replace the zeros with the digest of debian:bookworm-slim
-# (docker buildx imagetools inspect debian:bookworm-slim). Until then the
-# build fails, which is the point: the base is never a moving tag.
-FROM debian:bookworm-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS base
+# Debian 13 (trixie), the current stable release. PLACEHOLDER: replace the
+# zeros with the digest of debian:trixie-slim (docker buildx imagetools
+# inspect debian:trixie-slim). Until then the build fails, which is the
+# point: the base is never a moving tag.
+FROM debian:trixie-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
