@@ -95,6 +95,7 @@ internal/canary/       the in-container probe (warden probe), its output format,
 internal/wardenbin/    copy and verify the warden binary under <state>/bin/
 internal/controller/   compose generation, up/down/status/logs, post-start verification, RC URL
 images/controller/     reference controller image (Dockerfile only)
+images/                contract test for the Dockerfiles under it (images_test.go)
 ```
 
 Everything that touches the outside world sits behind an interface so tests need no Docker,
@@ -484,6 +485,43 @@ image contract in `DESIGN.md`:
 
 Open question to verify, not assume: whether Claude Code's native installer supports installing
 outside `$HOME`. If it doesn't, stop and present the alternatives.
+
+Answer (M5): it doesn't. `install.sh` downloads to `~/.claude/downloads` and runs `claude install`,
+which puts the launcher and versions under `~/.local`; the script says "This installer puts
+everything under $HOME". The alternatives are in the M5 pull request. **Proposed, pending
+approval:** skip the installer and fetch the native binary itself, the way `install.sh` does, at a
+pinned version, verified against a SHA-256 pinned in the Dockerfile.
+
+Precisely (**proposed in M5, pending approval**):
+
+- **Claude Code** comes from `https://downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`
+  (the URL `install.sh` uses), through `ADD --checksum=sha256:<hex> --chmod=0755`, to
+  `/usr/local/bin/claude`, owned by root. The version and one checksum per architecture (`linux-x64`,
+  `linux-arm64`, from that version's `manifest.json`) are literals in the Dockerfile, so a build
+  never trusts a manifest it fetched. One stage per architecture, selected by BuildKit's
+  `TARGETARCH`; no `# syntax=` line, since that would pull a frontend image. Updating means
+  changing the version and both checksums and rebuilding.
+- **No `curl` or installer script** in the image; `ca-certificates`, `git`, `ripgrep`, `less` and
+  `procps` from Debian, with the apt lists removed.
+- **`ENV HOME=/home/agent DISABLE_AUTOUPDATER=1`** (Warden sets `DISABLE_AUTOUPDATER` too; the image
+  is safe on its own). `/home/agent` exists, root-owned 0755: Warden mounts the agent home over it.
+- **`USER 65534:65534`** (nobody), so a plain `docker run` of the image isn't root. Warden always
+  passes its own `user`.
+- **No `ENTRYPOINT` or `CMD`.** Warden sets the entrypoint of every service; `claude` is on `PATH`.
+- **A contract test** (`images/images_test.go`, standard library only) parses the Dockerfile and
+  requires each rule above: the base pinned by digest, no `USER root` or `USER 0`, a final non-root
+  `USER`, no firewall tools (`iptables`, `nft`, `ufw`), no `sudo`, `setcap` or setuid, no `curl` or
+  `install.sh`, versioned download URLs with a checksum each, Claude Code outside `/home`, `HOME`,
+  `WORKDIR`, `DISABLE_AUTOUPDATER`, and no `ENTRYPOINT`.
+- **Live test** (`TestControllerImage`): if `CONTROLLER_IMAGE` is given to `scripts/e2e.sh` (an image
+  ID or digest; it must be local, nothing is built or pulled), the image's config must have a
+  non-root `User`, `HOME=/home/agent`, `WorkingDir` `/workspace` and no entrypoint. Then
+  `claude --version`, `git --version`, `rg --version`, `less --version` and `ps --version` must
+  each succeed with `--user <uid+1>:<gid+1> --cap-drop ALL --security-opt no-new-privileges
+  --read-only --network none`, a 1777 tmpfs at `/tmp` and at `/home/agent`. Finally, without
+  `--read-only`, `/usr/local/bin` and `/usr/local/bin/claude` must not be writable by that UID.
+  Without `CONTROLLER_IMAGE` it reports SKIP. Containers follow the e2e rules: `warden-e2e-`
+  names, `--rm`, recorded for the trap, never pulled.
 
 ## Controller
 
