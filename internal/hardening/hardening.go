@@ -5,6 +5,7 @@
 package hardening
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -42,10 +43,11 @@ type Fields struct {
 	Init         bool     `json:"init"`
 	// Explicit, so daemon defaults (default-ipc-mode, default-cgroupns-mode)
 	// can't weaken them.
-	IPC        string `json:"ipc"`
-	Cgroup     string `json:"cgroup"`
-	Restart    string `json:"restart"`
-	PullPolicy string `json:"pull_policy"`
+	IPC        string  `json:"ipc"`
+	Cgroup     string  `json:"cgroup"`
+	Sysctls    Sysctls `json:"sysctls"`
+	Restart    string  `json:"restart"`
+	PullPolicy string  `json:"pull_policy"`
 }
 
 // Settings returns the hardened fields for a container running as
@@ -96,3 +98,15 @@ func MemoryBytes(r Resources) int64 { return int64(r.MemoryMB) << 20 }
 // CPUPeriod is the CFS period Docker uses for --cpus: cpu.max reads
 // "<quota> 100000".
 const CPUPeriod = 100000
+
+// Sysctls are every container's kernel parameters: MPTCP off, a separate
+// protocol stack the agent has no use for. The sysctl is per network
+// namespace, so each container gets it whatever the host has. The type has
+// no fields, so it can't express any other sysctl; it always marshals to
+// SysctlValues.
+type Sysctls struct{}
+
+// SysctlValues is the map Sysctls marshals to, fresh on each call.
+func SysctlValues() map[string]string { return map[string]string{"net.mptcp.enabled": "0"} }
+
+func (Sysctls) MarshalJSON() ([]byte, error) { return json.Marshal(SysctlValues()) }

@@ -156,7 +156,7 @@ func validateNetwork(key string, v any) error {
 var (
 	requiredKeys = []string{
 		"user", "cap_drop", "security_opt", "read_only", "tmpfs", "mem_limit", "memswap_limit", "cpus",
-		"pids_limit", "init", "ipc", "cgroup", "restart", "pull_policy",
+		"pids_limit", "init", "ipc", "cgroup", "sysctls", "restart", "pull_policy",
 		"container_name", "image", "entrypoint", "command", "networks",
 	}
 	allowedKeys = append(append([]string(nil), requiredKeys...), "environment", "volumes", "depends_on")
@@ -186,6 +186,9 @@ func validateService(m map[string]any, nets, svcs map[string]any, p Policy) erro
 		if m[key] != want {
 			return fmt.Errorf("%s %v: must be %v", key, m[key], want)
 		}
+	}
+	if err := exactSysctls(m["sysctls"]); err != nil {
+		return err
 	}
 	mem, err1 := positiveInt(m["mem_limit"])
 	swap, err2 := positiveInt(m["memswap_limit"])
@@ -369,4 +372,24 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+// exactSysctls requires sysctls to be exactly hardening.SysctlValues(): the
+// same keys, each value the same string.
+func exactSysctls(v any) error {
+	want := hardening.SysctlValues()
+	got, ok := v.(map[string]any)
+	if ok && len(got) == len(want) {
+		for k, w := range want {
+			if s, isStr := got[k].(string); !isStr || s != w {
+				ok = false
+			}
+		}
+	} else {
+		ok = false
+	}
+	if !ok {
+		return fmt.Errorf("sysctls %v: must be exactly %v", v, want)
+	}
+	return nil
 }

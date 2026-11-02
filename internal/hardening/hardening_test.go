@@ -75,10 +75,14 @@ func TestFieldsCannotExpressUnsafeSettings(t *testing.T) {
 	var m map[string]any
 	json.Unmarshal(b, &m)
 	for _, k := range []string{"privileged", "cap_add", "devices", "pid", "network_mode", "userns_mode", "uts",
-		"volumes", "volumes_from", "ports", "device_cgroup_rules", "cgroup_parent", "sysctls", "extra_hosts"} {
+		"volumes", "volumes_from", "ports", "device_cgroup_rules", "cgroup_parent", "extra_hosts"} {
 		if _, ok := m[k]; ok {
 			t.Errorf("Fields can express %q", k)
 		}
+	}
+	// sysctls has a type of its own that marshals only to SysctlValues.
+	if s, _ := json.Marshal(m["sysctls"]); string(s) != `{"net.mptcp.enabled":"0"}` {
+		t.Errorf("sysctls = %s", s)
 	}
 	for k := range m {
 		if strings.ToLower(k) != k {

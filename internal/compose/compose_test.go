@@ -59,7 +59,7 @@ func TestRenderValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"cap_drop": [`, `"ALL"`, `"no-new-privileges:true"`, `"read_only": true`, `"init": true`,
-		`"ipc": "private"`, `"cgroup": "private"`, `"pull_policy": "never"`, `"restart": "no"`, `"user": "1000:1000"`,
+		`"ipc": "private"`, `"cgroup": "private"`, `"net.mptcp.enabled": "0"`, `"pull_policy": "never"`, `"restart": "no"`, `"user": "1000:1000"`,
 		`"create_host_path": false`, `"internal": true`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("rendered file lacks %s:\n%s", want, b)
@@ -126,17 +126,25 @@ func TestInvariants(t *testing.T) {
 			v["bind"] = map[string]any{"create_host_path": false, "propagation": "rshared"}
 			s["volumes"] = []any{v}
 		},
-		"relative source":    func(_, s map[string]any) { s["volumes"] = []any{vol("opt/x")} },
-		"unclean source":     func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/../var/run/docker.sock")} },
-		"duplicate target":   func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/a"), vol("/opt/b")} },
-		"volume extra key":   func(_, s map[string]any) { v := vol("/opt/x"); v["consistency"] = "cached"; s["volumes"] = []any{v} },
-		"volumes_from":       func(_, s map[string]any) { s["volumes_from"] = []any{"other"} },
-		"userns_mode host":   func(_, s map[string]any) { s["userns_mode"] = "host" },
-		"uts host":           func(_, s map[string]any) { s["uts"] = "host" },
-		"cgroup host":        func(_, s map[string]any) { s["cgroup"] = "host" },
-		"cgroup_parent":      func(_, s map[string]any) { s["cgroup_parent"] = "/" },
-		"ports":              func(_, s map[string]any) { s["ports"] = []any{"3128:3128"} },
-		"sysctls":            func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.ipv4.ip_forward": "1"} },
+		"relative source":  func(_, s map[string]any) { s["volumes"] = []any{vol("opt/x")} },
+		"unclean source":   func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/../var/run/docker.sock")} },
+		"duplicate target": func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/a"), vol("/opt/b")} },
+		"volume extra key": func(_, s map[string]any) { v := vol("/opt/x"); v["consistency"] = "cached"; s["volumes"] = []any{v} },
+		"volumes_from":     func(_, s map[string]any) { s["volumes_from"] = []any{"other"} },
+		"userns_mode host": func(_, s map[string]any) { s["userns_mode"] = "host" },
+		"uts host":         func(_, s map[string]any) { s["uts"] = "host" },
+		"cgroup host":      func(_, s map[string]any) { s["cgroup"] = "host" },
+		"cgroup_parent":    func(_, s map[string]any) { s["cgroup_parent"] = "/" },
+		"ports":            func(_, s map[string]any) { s["ports"] = []any{"3128:3128"} },
+		"sysctls":          func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.ipv4.ip_forward": "1"} },
+		"sysctls missing":  func(_, s map[string]any) { delete(s, "sysctls") },
+		"sysctls empty":    func(_, s map[string]any) { s["sysctls"] = map[string]any{} },
+		"mptcp on":         func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.mptcp.enabled": "1"} },
+		"mptcp number":     func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.mptcp.enabled": 0} },
+		"sysctls list":     func(_, s map[string]any) { s["sysctls"] = []any{"net.mptcp.enabled=0"} },
+		"sysctls extra": func(_, s map[string]any) {
+			s["sysctls"] = map[string]any{"net.mptcp.enabled": "0", "net.ipv4.ip_forward": "1"}
+		},
 		"security_opt extra": func(_, s map[string]any) { s["security_opt"] = []any{"no-new-privileges:true", "seccomp=unconfined"} },
 		"seccomp unconfined": func(_, s map[string]any) { s["security_opt"] = []any{"seccomp=unconfined"} },
 		"no nnp":             func(_, s map[string]any) { s["security_opt"] = []any{} },
