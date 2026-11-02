@@ -479,7 +479,8 @@ Precisely:
 Built by the user for now (`docker build`), then referenced in config by image ID. It follows the
 image contract in `DESIGN.md`:
 - `debian:trixie-slim` base (Debian 13, the current stable release; bookworm is past its regular
-  security support), pinned by digest; `ca-certificates`, `git`, `ripgrep`, `less`, `procps`;
+  security support), pinned by digest (`sha256:f6b08b09…3ec4`, recorded on the operator's host on
+  2026-11-02; the contract test refuses the all-zero placeholder); `ca-certificates`, `git`, `ripgrep`, `less`, `procps`;
 - Claude Code installed **outside `$HOME`**;
 - no `USER root` entrypoint, no firewall, no `iptables`: the image runs as whatever UID Warden passes;
 - `HOME=/home/agent`, `WORKDIR /workspace`.
@@ -502,7 +503,10 @@ Precisely (decided in the M5 review):
   `/usr/local/bin/claude`, owned by root. The version and one checksum per architecture (`linux-x64`,
   `linux-arm64`, from that version's `manifest.json`) are literals in the Dockerfile, so a build
   never trusts a manifest it fetched. One stage per architecture, selected by BuildKit's
-  `TARGETARCH`; no `# syntax=` line, since that would pull a frontend image. Updating means
+  `TARGETARCH`; no `# syntax=` line, since that would pull a frontend image. Building needs BuildKit, which
+  `docker build` uses only when the buildx plugin is installed (`docker-buildx` for Debian and
+  Ubuntu's `docker.io`, `docker-buildx-plugin` for Docker's `docker-ce`); the legacy builder has no
+  `ADD --checksum`, `ADD --chmod` or `TARGETARCH`. Warden itself doesn't need buildx. Updating means
   changing the version and both checksums and rebuilding.
 - **No `curl` or installer script** in the image; `ca-certificates`, `git`, `ripgrep`, `less` and
   `procps` from Debian, with the apt lists removed.

@@ -98,6 +98,9 @@ func contract(src string) (problems []string) {
 		bad("line %d: the first instruction must be FROM debian:trixie-slim@sha256:<64 hex> AS base, got %s %s",
 			ins[0].line, ins[0].cmd, ins[0].args)
 	}
+	if strings.Contains(ins[0].args, "sha256:"+strings.Repeat("0", 64)) {
+		bad("line %d: the base digest is the all-zero placeholder: fill in the real digest", ins[0].line)
+	}
 	var lastUser, home, workdir string
 	autoupdaterOff := false
 	versions := map[string]string{} // platform -> version
@@ -188,7 +191,8 @@ func TestContractRefuses(t *testing.T) {
 	}
 	digest := "sha256:" + strings.Repeat("0", 64)
 	cases := map[string][2]string{
-		"base by tag":      {"debian:trixie-slim@" + digest + " AS base", "debian:trixie-slim AS base"},
+		"base by tag":      {"@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS base", " AS base"},
+		"zero digest":      {"sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4", digest},
 		"older base":       {"debian:trixie-slim@", "debian:bookworm-slim@"},
 		"other base":       {"FROM base AS claude-amd64", "FROM ubuntu:24.04 AS claude-amd64"},
 		"user root":        {"USER 65534:65534", "USER root"},

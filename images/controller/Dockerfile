@@ -12,14 +12,18 @@
 #   https://downloads.claude.ai/claude-code-releases/<version>/manifest.json
 # change all three below, and rebuild. Self-updating is off.
 #
-# No "# syntax=" line: that would pull a Dockerfile frontend image. ADD
-# --checksum and --chmod need Docker's built-in BuildKit (Engine 25+).
+# No "# syntax=" line: that would pull a Dockerfile frontend image.
+# Building needs BuildKit, which docker build uses only with the buildx plugin
+# installed (docker buildx version): ADD --checksum, ADD --chmod and
+# TARGETARCH don't exist in the legacy builder. Install docker-buildx (Debian
+# and Ubuntu's docker.io) or docker-buildx-plugin (Docker's docker-ce).
+# Warden itself doesn't need buildx.
 
-# Debian 13 (trixie), the current stable release. PLACEHOLDER: replace the
-# zeros with the digest of debian:trixie-slim (docker buildx imagetools
-# inspect debian:trixie-slim). Until then the build fails, which is the
-# point: the base is never a moving tag.
-FROM debian:trixie-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS base
+# Debian 13 (trixie), the current stable release, pinned by the digest the
+# operator's host recorded for debian:trixie-slim on 2026-11-02. To update it:
+#   docker pull debian:trixie-slim
+#   docker image inspect --format '{{index .RepoDigests 0}}' debian:trixie-slim
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
