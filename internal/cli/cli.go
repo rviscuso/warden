@@ -154,7 +154,7 @@ func commands() []*command {
 			name:    "init",
 			args:    "[--json]",
 			summary: "Run the checks and, on success, pin the daemon",
-			detail:  "Create Warden's directories, run every check, and on success pin the daemon in Warden's state. Re-pinning to a different daemon asks for approval.",
+			detail:  "Create Warden's directories, run every check, and on success pin the daemon in Warden's state. Re-pinning to a different daemon asks for approval. On a terminal with no config yet, init asks for one step by step (it can create the workspace, pull the runtime image and build the reference controller image, each only after a y); otherwise it prints an example config.",
 			define:  jsonCommand(runInit),
 		},
 		{
