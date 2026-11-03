@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rviscuso/warden/images"
 	"io"
 	"net"
 	"net/netip"
@@ -75,19 +76,15 @@ func (r *run) canary() {
 	}
 	ctx, cancel := context.WithTimeout(r.env.Ctx, CanaryTimeout)
 	defer cancel()
-	cfg := r.rep.Config
 
 	// canary.image: local, never pulled.
-	if _, err := r.dockerIn(ctx, nil, "image", "inspect", "--format", "{{.Id}}", cfg.RuntimeImage); err != nil {
-		fix := "docker pull " + cfg.RuntimeImage
-		if !strings.Contains(cfg.RuntimeImage, "@sha256:") {
-			fix = "load or build the image, then set runtime_image to its ID"
-		}
-		r.fail(idImage, "Runtime image is local", fmt.Sprintf("runtime_image %s is not local; Warden never pulls (%s)", cfg.RuntimeImage, oneLine(err)), fix)
+	if _, err := r.dockerIn(ctx, nil, "image", "inspect", "--format", "{{.Id}}", images.RuntimeImage); err != nil {
+		r.fail(idImage, "Runtime image is local", fmt.Sprintf("runtime image %s is not local; the canary never pulls (%s)", images.RuntimeImage, oneLine(err)),
+			"docker pull "+images.RuntimeImage+", or run warden init on a terminal to pull it")
 		r.canaryFail(1, -1, "not run: depends on "+idImage, "")
 		return
 	}
-	r.pass(idImage, "Runtime image is local", cfg.RuntimeImage)
+	r.pass(idImage, "Runtime image is local", images.RuntimeImage)
 
 	c := &canaryRun{r: r, ctx: ctx}
 	verdicts, setupErr := c.run()
@@ -232,7 +229,7 @@ func (c *canaryRun) run() ([]canary.Verdict, error) {
 	}
 	hostH := hardening.Host{MPTCP: mptcp}
 	f, err := canary.Project(canary.ProjectParams{
-		UID: r.env.UID, GID: r.env.GID, RuntimeImage: cfg.RuntimeImage, Binary: bin, MountDir: mnt,
+		UID: r.env.UID, GID: r.env.GID, RuntimeImage: images.RuntimeImage, Binary: bin, MountDir: mnt,
 		Allow: cfg.Egress.Allow, Resources: resources, Host: hostH,
 	})
 	if err != nil {

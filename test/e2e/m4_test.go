@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"github.com/rviscuso/warden/images"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -110,12 +111,12 @@ func TestCanaryLive(t *testing.T) {
 // canary.nnp, canary.rootfs, canary.uid and (on a host with MPTCP)
 // canary.mptcp to fail.
 func TestCanaryNegativeControl(t *testing.T) {
-	image := mustEnv(t, "WARDEN_E2E_RUNTIME_IMAGE")
+	image := images.RuntimeImage
 	r := dockerRunner(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if _, _, code, err := r.Run(ctx, []string{"image", "inspect", "--format", "{{.Id}}", image}, nil); err != nil || code != 0 {
-		t.Skipf("SKIP: %s is not local; nothing is pulled", image)
+		t.Fatalf("%s is not local and nothing is pulled: docker pull %s", image, image)
 	}
 	s := newSandbox(t)
 	dir := filepath.Join(s.root, "probe")
