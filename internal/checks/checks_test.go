@@ -113,7 +113,6 @@ func (h *harness) writeConfig(workspace, socket string) {
 	cfg := `{
   "version": 1,
   "docker": {"socket": "` + socket + `"},
-  "runtime_image": "busybox@` + digest + `",
   "egress": {"allow": ["api.anthropic.com"]},
   "controller": {"image": "` + digest + `", "workspace": "` + workspace + `",
     "remote_control_name": "warden", "resources": {"memory_mb": 1536, "cpus": 1.5, "pids": 512}}

@@ -200,7 +200,6 @@ func printReport(w io.Writer, rep *checks.Report, jsonOut bool) {
 const exampleConfig = `{
   "version": 1,
   "docker": { "socket": "/var/run/docker.sock" },
-  "runtime_image": "` + exampleRuntimeImage + `",
   "egress": { "allow": ["api.anthropic.com", "platform.claude.com"] },
   "controller": {
     "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -214,15 +213,9 @@ const exampleConfig = `{
 const exampleExplanation = `An example config is printed on stdout. Fields:
   version                  always 1
   docker.socket            the Docker daemon's socket (optional; this is the default)
-  runtime_image            stock image for Warden's own containers (proxy, canary), pinned by
-                           digest (name@sha256:<64 hex>); it must be local: docker pull it first
   egress.allow             hostnames the sandbox may reach; a leading dot allows subdomains
-  controller.image         the controller image ID (sha256:<64 hex>): docker build -t
-                           warden-controller images/controller, then
-                           docker image inspect --format '{{.Id}}' warden-controller
+  controller.image         the controller image ID (sha256:<64 hex>); to build Warden's reference
+                           image, run warden init in a terminal
   controller.workspace     absolute path of the repository the agent may change
   controller.remote_control_name   name shown in Claude's Remote Control
   controller.resources     memory_mb 256-65536, cpus 0.25-64, pids 64-32768`
-
-// exampleRuntimeImage is the example config's placeholder runtime_image.
-const exampleRuntimeImage = "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000"

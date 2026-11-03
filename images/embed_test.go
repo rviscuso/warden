@@ -62,3 +62,15 @@ func TestDescribeRefuses(t *testing.T) {
 		}
 	}
 }
+
+// scripts/e2e.sh reads the pin from this exact line of images.go.
+func TestRuntimeImageLineForE2E(t *testing.T) {
+	src, err := os.ReadFile("images.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := regexp.MustCompile(`(?m)^const RuntimeImage = "busybox@sha256:[0-9a-f]{64}"$`).Find(src)
+	if string(line) != `const RuntimeImage = "`+RuntimeImage+`"` {
+		t.Fatalf("e2e.sh can't find the pin; found %q", line)
+	}
+}

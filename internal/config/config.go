@@ -37,11 +37,10 @@ const (
 // UID, privileged mode, capabilities, namespaces, devices, extra mounts,
 // ports or the Docker socket as a mount.
 type Config struct {
-	Version      int        `json:"version"`
-	Docker       Docker     `json:"docker"`
-	RuntimeImage string     `json:"runtime_image"`
-	Egress       Egress     `json:"egress"`
-	Controller   Controller `json:"controller"`
+	Version    int        `json:"version"`
+	Docker     Docker     `json:"docker"`
+	Egress     Egress     `json:"egress"`
+	Controller Controller `json:"controller"`
 }
 
 // Docker locates the daemon.
@@ -80,6 +79,9 @@ func Load(path string) (*Config, error) {
 
 // Parse decodes data strictly, applies defaults and validates the result.
 func Parse(data []byte) (*Config, error) {
+	if err := removedFields(data); err != nil {
+		return nil, err
+	}
 	if err := checkKeys(data, reflect.TypeFor[Config]()); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -117,7 +119,6 @@ func (c *Config) Validate() error {
 	if !filepath.IsAbs(c.Docker.Socket) {
 		add("docker.socket", fmt.Errorf("must be an absolute path, got %q", c.Docker.Socket))
 	}
-	add("runtime_image", ValidateImage(c.RuntimeImage))
 	add("controller.image", ValidateImage(c.Controller.Image))
 
 	if len(c.Egress.Allow) == 0 {
@@ -257,4 +258,18 @@ func allDigits(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+// removedFields refuses, with the fix, a top-level field an earlier
+// version of the schema had. Any other unknown field is refused by the
+// strict decoder.
+func removedFields(data []byte) error {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) != nil {
+		return nil // not an object: the decoder reports it
+	}
+	if _, ok := top["runtime_image"]; ok {
+		return errors.New("config: runtime_image was removed: Warden pins it; delete the line")
+	}
+	return nil
 }

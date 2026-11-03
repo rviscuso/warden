@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/rviscuso/warden/images"
 	"io/fs"
 	"net"
 	"os"
@@ -81,7 +82,7 @@ func (h *host) script(id string) {
 	h.fake.On([]string{"info", "--format", "{{json .}}"}, dockertest.Response{Stdout: `{"ID":"` + id + `","CgroupVersion":"2","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin"]}`})
 	h.fake.On([]string{"version", "--format", "{{json .}}"}, dockertest.Response{Stdout: `{"Server":{"Version":"29.1.3","Components":[{"Name":"runc","Version":"1.4.0"},{"Name":"containerd","Version":"2.2.2"}]}}`})
 	h.fake.On([]string{"ps", "-aq", "--no-trunc"}, dockertest.Response{})
-	h.cn = checkstest.Script(h.t, h.fake, h.root, filepath.Join(h.stateDir(), "canary"), exampleRuntimeImage)
+	h.cn = checkstest.Script(h.t, h.fake, h.root, filepath.Join(h.stateDir(), "canary"), images.RuntimeImage)
 }
 
 func (h *host) configDir() string { return filepath.Join(h.xdg["XDG_CONFIG_HOME"], "warden") }
@@ -155,7 +156,8 @@ func TestInitWithoutConfigPrintsExample(t *testing.T) {
 		}
 	}
 	if !strings.Contains(r.stderr, "no config at "+filepath.Join(h.configDir(), "config.json")) ||
-		!strings.Contains(r.stderr, "egress.allow") || !strings.Contains(r.stderr, ".new; mv ") {
+		!strings.Contains(r.stderr, "egress.allow") || !strings.Contains(r.stderr, ".new; mv ") ||
+		!strings.Contains(r.stderr, "run warden init in a terminal") || strings.Contains(r.stderr, "runtime_image") {
 		t.Fatalf("stderr:\n%s", r.stderr)
 	}
 	// stdout is exactly the example, which is valid JSON and a valid config.
