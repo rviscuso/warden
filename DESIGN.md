@@ -31,7 +31,7 @@ proposal that a human approves before Warden applies it.
 - **Zero third-party code.** Warden drives a Docker daemon, which is root-equivalent, so every line in the binary is trusted code. Using only Go's standard library keeps that trust limited to Warden itself and the Go toolchain, with no supply-chain risk from dependencies.
 - **Runs as you.** No `sudo`. Warden refuses to run as root.
 
-Non-goals: multiple hosts, Kubernetes, installing or reconfiguring Docker, and image builds (until there is an isolated builder).
+Non-goals: multiple hosts, Kubernetes, installing or reconfiguring Docker, and building any image other than Warden's own reference controller image (section 6), which it builds only from the Dockerfile in its binary, never from the workspace or any user-supplied context.
 
 ## 2. Threat model
 
@@ -56,10 +56,13 @@ reviewed exactly what will run.
 | Network egress | An agent with open internet can download and run anything, or send the workspace anywhere | No route out: the sandbox network is internal. The only exit is Warden's proxy, which allows HTTPS to listed hostnames only, refuses IP literals and private addresses, and logs every connection. Outside names don't resolve inside the sandbox |
 | Files the user later runs or loads | The agent runs with the user's UID, so any file it can write outside the workspace (`~/.bashrc`, Warden's config, SSH config) becomes code the user executes | Mount validation (section 6): the workspace can't be or contain the home directory, Warden's directories or other sensitive paths. Security-critical, with its own tests |
 | Host running agent-written files | Makefiles (`GNUmakefile` and `makefile` win over `Makefile`), Compose files, Dockerfiles, scripts, Terraform `external`, wrangler build commands | Snapshot diff of execution paths against a baseline in host state, shown at approval. Only the approved file runs |
-| Host git in an agent-writable repo | `.git/config` (`core.fsmonitor`, `core.hooksPath`, `core.pager`, `credential.helper`, filters, `include.path`, `url.*.insteadOf`, …), hooks, `info/attributes`, `objects/info/alternates` all run commands or redirect pushes | The host never runs git inside a repo the agent can write. Commits leave from inside the sandbox (direct push) or as bundles into a clean clone the agent never touched (`publish`). See section 8 |
+| Host git in an agent-writable repo | `.git/config` (`core.fsmonitor`, `core.hooksPath`, `core.pager`, `credential.helper`, filters, `include.path`, `url.*.insteadOf`, …), hooks, `info/attributes`, `objects/info/alternates` all run commands or redirect pushes | The host runs git in a workspace only once: `git init` in a folder Warden has just created, before the agent has ever run. After that, any git operation Warden needs (such as adding a remote) runs in a throwaway sandboxed container. Commits leave from inside the sandbox (direct push) or as bundles into a clean clone the agent never touched (`publish`). See section 8 |
 | Symlinks | A path inside the workspace can point anywhere on the host | Resolve and confine every host path before use |
 | Reviewing a file that then changes | A window between review and use | Copy first, then review the copy, then use the copy |
 | Warden's own source | An agent that can edit Warden can disable it | Warden's source is never mounted into a container Warden manages |
+| Image build context | An agent that can write a Dockerfile Warden builds can write its own container image | Warden builds only its reference controller image, from the Dockerfile compiled into its binary, in a fresh build context holding nothing else. Never from the workspace or a path the user gives. The resulting image ID is pinned in config |
+| Container output on the user's terminal | The agent controls what its container prints; a crafted line can carry terminal escape sequences or a lookalike link | URLs taken from container output (the Remote Control URL, the sign-in link) must match a strict pattern and contain no control characters; Warden builds any terminal hyperlink itself from the validated string |
+| Agent credentials | A long-lived token or API key in config or a container's environment is visible to `docker inspect` and easy to leak | The user signs in with Claude Code's own login, in a throwaway sandboxed container. Claude Code keeps the login in the agent home (mode 0600). No token or API key in Warden's config or any container's environment |
 | Container escape (kernel, runc) | On a rootful daemon, an escape is host root | Defence in depth: no capabilities from the first instruction, `no-new-privileges`, seccomp, AppArmor, resource limits, read-only root filesystem |
 
 **Assumption.** Coding agents make mistakes, and they read content they didn't write
@@ -69,6 +72,8 @@ agent always getting it right: the boundary holds either way.
 **Accepted, out of scope:**
 - The agent can always send data to its model provider; that channel is the product.
 - Allowlisting is by hostname, not URL path. An allowed host is reachable in full.
+- The controller image's Debian packages are signed but not version-pinned, so two builds can differ. Pinning the resulting image ID in config makes any difference visible rather than silent.
+- First-run setup of Claude Code is pre-seeded in the agent home using Claude Code's internal, undocumented settings format, tied to the version the image pins. A live test checks that no first-run screen appears and gates every Claude Code version bump.
 - If an allowed host shares a CDN with other sites, a client can reach those sites through it (domain fronting), because the proxy sees only the CONNECT hostname, not what is sent inside TLS.
 - A zero-day in the kernel or Docker can defeat any container boundary. Warden reduces the odds; it does not remove them.
   - A concrete example is CVE-2026-98432, a use-after-free in Linux's IPv4 TCP code whose demonstrated
@@ -104,7 +109,7 @@ user ──▶ warden (CLI, runs as the user) ──argv only──▶ docker CL
 - **Driving Docker.** Warden generates compose files as JSON (valid YAML, no YAML dependency) and runs `docker compose`, passing arguments as argv (never `sh -c`). The approval prompt shows the generated file.
 - **Docker environment hygiene.** Warden ignores `DOCKER_HOST` and `DOCKER_CONTEXT`. It passes the socket recorded at `init` explicitly and uses its own empty `DOCKER_CONFIG`, so no credential helper or CLI plugin from the user's Docker config runs.
 - **Daemon pinning.** `init` records the daemon's socket and ID. Every later command checks the ID and refuses on a mismatch.
-- **No image builds.** Warden's own containers (canary, proxy) run from one small stock image pinned by digest, with the static `warden` binary mounted read-only.
+- **Images.** Warden's own containers (canary, proxy) run from one small stock image pinned by a digest in Warden's code, with the static `warden` binary mounted read-only. Warden pulls only that image, only by that digest, and builds only its reference controller image (section 6); each after showing the exact command and getting a `y`. Without a terminal it never pulls or builds; it prints the commands instead.
 
 ## 4. Docker modes
 
@@ -171,14 +176,24 @@ and their tests are in `docs/phase-1.md`.
 
 **Controller image contract**
 
-Warden ships a reference controller image definition in this repo (built by the user until
-there is an isolated builder). Any controller image must:
+Warden ships a reference controller image definition, compiled into its binary. `init` builds
+it on approval, from a fresh build context that contains only that Dockerfile, and pins the
+resulting image ID in config. Any controller image must:
 - run correctly as an arbitrary non-root UID and GID, with no capabilities;
 - install its tools outside `$HOME`, with self-updating turned off (rebuild the image to update);
 - use `/home/agent` as `$HOME`, which Warden bind-mounts from the user's agent-home directory;
 - reach the network only through `HTTPS_PROXY`, which Warden sets.
 
 No firewall, no root entrypoint: egress control lives in the network, not in the image.
+
+**Signing in**
+
+Remote Control needs a claude.ai login; API keys and long-lived tokens can't start it. `up`
+checks the login with Claude Code's `claude auth status` in a throwaway container with the
+same hardening and network as the controller and the agent home mounted. If there is no
+valid login, it runs `claude auth login` there with the user's terminal attached: the user
+signs in in their own browser. Claude Code keeps the login in the agent home, so later `up`
+runs skip the step until it expires; `warden login` repeats it on demand.
 
 ## 7. Network
 
@@ -197,6 +212,8 @@ No firewall, no root entrypoint: egress control lives in the network, not in the
 Two modes, chosen per workspace in config. In both, the host never runs git inside the workspace.
 
 **Direct push (phase 2).** The agent pushes branches itself with a token Warden passes in.
+- The token reaches the controller as one read-only file, never an environment variable; git and `gh` read it through a credential helper and a wrapper.
+- Warden sets up the remote by running git in a throwaway sandboxed container, never on the host.
 - The token belongs to a machine account with write access to that one repository: a classic token with only `public_repo` or `repo`, never `workflow`.
 - `github.com` joins the allowlist. Hostname filtering can't limit it to one repository, so the token's scope is what limits writes.
 - The repository must protect its default branch (pull request required, approval by a human, no force pushes), so the agent's branches reach `main` only through review.
@@ -223,8 +240,9 @@ Ordinary builds and tests run inside the agent's own sandbox and don't need this
 
 | Phase | Scope |
 |---|---|
-| 1 | `init` / `check` (prerequisites + canary), egress proxy with domain allowlist and connection log, `up` / `down` / `status` / `logs` for the controller. See `docs/phase-1.md` |
-| 2 | Direct push: machine-account token passed into the sandbox, `github.com` on the allowlist, `init` / `check` warnings |
+| 1 | `init` / `check` (prerequisites + canary), egress proxy with domain allowlist and connection log, `up` / `down` / `status` / `logs` for the controller, guided `init`, and Claude sign-in on `up`. See `docs/phase-1.md` |
+| 2a | Direct push, core: a `git` section in config; the machine-account token mounted read-only as one fixed file, never an environment variable; a git credential helper and a `gh` wrapper that read it; `github.com` and `api.github.com` on the allowlist; `curl` and `gh` (pinned, checksum-verified) in the reference image; the remote and upstream set up by running git in a throwaway sandboxed container, never on the host |
+| 2b | Direct push, checks: `init` / `check` warn when the token file isn't the user's, isn't mode 0600 or sits in the workspace, when the token has `workflow` scope or more than repository access, and when the default branch doesn't require a pull request and an approval |
 | 3 | Services: MCP servers and app containers on the sandbox network, declared ports, per-service egress |
 | 4 | Approved actions: `run` for work that needs secrets, extra egress or another image, with execution-path diff and run logs |
 | 5 | `publish`: commits leave as bundles into a user-owned clean clone, pushed on approval |
