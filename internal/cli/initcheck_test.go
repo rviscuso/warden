@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/rviscuso/warden/images"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -38,6 +39,7 @@ type host struct {
 	xdg   map[string]string
 	fake  *dockertest.Fake
 	stdin string
+	tty   bool // stdin counts as a terminal
 	now   time.Time
 	cn    *checkstest.Canary
 }
@@ -104,10 +106,11 @@ func (h *host) run(args ...string) result {
 	h.t.Helper()
 	var out, errb bytes.Buffer
 	e := &env{
-		stdin:  strings.NewReader(h.stdin),
-		stdout: &out,
-		stderr: &errb,
-		getenv: func(k string) string { return h.xdg[k] },
+		stdin:      strings.NewReader(h.stdin),
+		isTerminal: func(io.Reader) bool { return h.tty },
+		stdout:     &out,
+		stderr:     &errb,
+		getenv:     func(k string) string { return h.xdg[k] },
 		buildInfo: func() (*debug.BuildInfo, bool) {
 			return &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-test"}}, true
 		},

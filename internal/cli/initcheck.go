@@ -76,17 +76,22 @@ func runInit(e *env, jsonOut bool) int {
 		return ExitFail
 	}
 
+	summary := !jsonOut && e.terminal()
 	rep := checks.Run(e.checksEnv(checks.ModeInit, dirs, home))
-	printReport(e.stdout, rep, jsonOut)
+	if summary {
+		printSummary(e.stdout, rep)
+	} else {
+		printReport(e.stdout, rep, jsonOut)
+	}
 	if !rep.OK() {
 		return ExitFail
 	}
-	return pinDaemon(e, dirs, rep.Daemon, jsonOut)
+	return pinDaemon(e, dirs, rep.Daemon, jsonOut, summary)
 }
 
 // pinDaemon records the daemon. Changing an existing pin to another daemon
 // or socket is a trust change and needs an explicit "y".
-func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
+func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut, summary bool) int {
 	msg := e.stdout
 	if jsonOut {
 		msg = e.stderr // keep stdout pure JSON
@@ -119,6 +124,10 @@ func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
 	if err := state.Save(file, s); err != nil {
 		fmt.Fprintf(e.stderr, "warden init: %v\n", err)
 		return ExitFail
+	}
+	if summary {
+		fmt.Fprintf(msg, "All checks passed. Pinned daemon %s at %s.\nNext: warden up\n", d.ID, d.Socket)
+		return ExitOK
 	}
 	fmt.Fprintf(msg, "Pinned daemon %s at %s.\n", d.ID, d.Socket)
 	return ExitOK
@@ -219,3 +228,89 @@ const exampleExplanation = `An example config is printed on stdout. Fields:
   controller.workspace     absolute path of the repository the agent may change
   controller.remote_control_name   name shown in Claude's Remote Control
   controller.resources     memory_mb 256-65536, cpus 0.25-64, pids 64-32768`
+
+// terminal reports whether stdin is a terminal.
+func (e *env) terminal() bool { return e.isTerminal != nil && e.isTerminal(e.stdin) }
+
+// summaryGroups are the check groups of the summary, in order, and the ID
+// prefixes each holds.
+var summaryGroups = []struct {
+	name     string
+	prefixes []string
+}{
+	{"config", []string{"config.", "workspace."}},
+	{"host", []string{"host."}},
+	{"daemon", []string{"daemon."}},
+	{"canary", []string{"canary."}},
+}
+
+// printSummary prints one line per group, then every failing or warning
+// check in full with its fix. A check in no group is printed in full, so
+// nothing is ever hidden by the grouping.
+func printSummary(w io.Writer, rep *checks.Report) {
+	grouped := make([]bool, len(rep.Results))
+	for _, g := range summaryGroups {
+		var pass, warn, fail int
+		for i, r := range rep.Results {
+			if !hasAnyPrefix(r.ID, g.prefixes) {
+				continue
+			}
+			grouped[i] = true
+			switch r.Status {
+			case checks.Pass:
+				pass++
+			case checks.Warn:
+				warn++
+			default:
+				fail++
+			}
+		}
+		if pass+warn+fail == 0 {
+			continue
+		}
+		mark, parts := "✓", []string{}
+		if fail > 0 {
+			mark = "✗"
+			parts = append(parts, fmt.Sprintf("%d failed", fail))
+		} else if warn > 0 {
+			mark = "!"
+		}
+		parts = append(parts, fmt.Sprintf("%d passed", pass))
+		if warn > 0 {
+			parts = append(parts, plural(warn, "warning"))
+		}
+		fmt.Fprintf(w, "%s %-7s %s\n", mark, g.name, strings.Join(parts, ", "))
+	}
+	for i, r := range rep.Results {
+		if r.Status == checks.Pass && grouped[i] {
+			continue
+		}
+		mark := map[checks.Status]string{checks.Pass: "✓", checks.Warn: "!"}[r.Status]
+		if mark == "" {
+			mark = "✗"
+		}
+		fmt.Fprintf(w, "  %s %s  %s\n", mark, r.ID, r.Detail)
+		if r.Fix != "" && r.Status != checks.Pass {
+			fmt.Fprintf(w, "    fix: %s\n", r.Fix)
+		}
+	}
+	if !rep.OK() {
+		fmt.Fprintln(w, "Some checks failed.")
+	}
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}

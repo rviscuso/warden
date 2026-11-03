@@ -39,12 +39,13 @@ const (
 // env is everything a command may touch outside its arguments. Tests
 // replace it; Run fills it from the real process.
 type env struct {
-	stdin     io.Reader
-	stdout    io.Writer
-	stderr    io.Writer
-	getenv    func(string) string
-	buildInfo func() (*debug.BuildInfo, bool)
-	geteuid   func() int
+	stdin      io.Reader
+	isTerminal func(io.Reader) bool // nil: never a terminal
+	stdout     io.Writer
+	stderr     io.Writer
+	getenv     func(string) string
+	buildInfo  func() (*debug.BuildInfo, bool)
+	geteuid    func() int
 
 	getuid      func() int
 	getgid      func() int
@@ -75,12 +76,13 @@ type env struct {
 // returns the process exit code.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return run(&env{
-		stdin:     stdin,
-		stdout:    stdout,
-		stderr:    stderr,
-		getenv:    os.Getenv,
-		buildInfo: debug.ReadBuildInfo,
-		geteuid:   os.Geteuid,
+		stdin:      stdin,
+		isTerminal: isTerminal,
+		stdout:     stdout,
+		stderr:     stderr,
+		getenv:     os.Getenv,
+		buildInfo:  debug.ReadBuildInfo,
+		geteuid:    os.Geteuid,
 
 		getuid:      os.Getuid,
 		getgid:      os.Getgid,
