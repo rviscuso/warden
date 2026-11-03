@@ -23,8 +23,10 @@ import (
 	"time"
 
 	"github.com/rviscuso/warden/internal/canary"
+	"github.com/rviscuso/warden/internal/config"
 	"github.com/rviscuso/warden/internal/controller"
 	"github.com/rviscuso/warden/internal/docker"
+	"github.com/rviscuso/warden/internal/gitinit"
 	"github.com/rviscuso/warden/internal/netx"
 	"github.com/rviscuso/warden/internal/proxy"
 )
@@ -58,6 +60,12 @@ type env struct {
 	dockerPaths []string
 	newRunner   func(docker.Options) (docker.Runner, error)
 	systemDirs  []string // nil in production: mounts.DefaultSystemDirs
+
+	// the guided init
+	getwd         func() (string, error)
+	defaultSocket string   // config.DefaultSocket in production
+	gitPaths      []string // gitinit.BinaryPaths in production
+	gitInit       func(ctx context.Context, binary, dir, home string) error
 
 	// the canary (init, check)
 	executable   func() (string, error)
@@ -94,6 +102,11 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		goarch:      runtime.GOARCH,
 		dockerPaths: docker.BinaryPaths,
 		newRunner:   func(o docker.Options) (docker.Runner, error) { return docker.New(o) },
+
+		getwd:         os.Getwd,
+		defaultSocket: config.DefaultSocket,
+		gitPaths:      gitinit.BinaryPaths,
+		gitInit:       gitinit.Init,
 
 		// Every listener goes through netx: MPTCP off (DESIGN.md §2).
 		listen: func(address string) (net.Listener, error) {

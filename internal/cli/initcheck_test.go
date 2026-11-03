@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/rviscuso/warden/images"
@@ -31,17 +32,20 @@ const (
 // workspace and XDG dirs as siblings, a real unix socket, a fake docker
 // binary file and a scripted runner.
 type host struct {
-	t     *testing.T
-	root  string
-	home  string
-	ws    string
-	sock  string
-	xdg   map[string]string
-	fake  *dockertest.Fake
-	stdin string
-	tty   bool // stdin counts as a terminal
-	now   time.Time
-	cn    *checkstest.Canary
+	t       *testing.T
+	root    string
+	home    string
+	ws      string
+	sock    string
+	xdg     map[string]string
+	fake    *dockertest.Fake
+	stdin   string
+	tty     bool // stdin counts as a terminal
+	cwd     string
+	gits    []string   // git init calls (dirs)
+	envHook func(*env) // changes the env before the run
+	now     time.Time
+	cn      *checkstest.Canary
 }
 
 func newHost(t *testing.T) *host {
@@ -61,12 +65,14 @@ func newHost(t *testing.T) *host {
 		},
 		now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC),
 	}
+	h.cwd = root
 	for _, d := range []string{h.home, h.ws, filepath.Join(root, "hostfs/sys/fs/cgroup"), filepath.Join(root, "bin")} {
 		os.MkdirAll(d, 0o700)
 	}
 	os.WriteFile(filepath.Join(root, "hostfs/sys/fs/cgroup/cgroup.controllers"), []byte("cpu\n"), 0o644)
 	os.MkdirAll(filepath.Join(root, "hostfs/proc/sys/net/mptcp"), 0o755) // a kernel with MPTCP
 	os.WriteFile(filepath.Join(root, "bin/docker"), nil, 0o755)
+	os.WriteFile(filepath.Join(root, "bin/git"), nil, 0o755)
 	h.sock = filepath.Join(root, "d.sock")
 	l, err := net.Listen("unix", h.sock)
 	if err != nil {
@@ -131,7 +137,17 @@ func (h *host) run(args ...string) result {
 		canaryListen: h.cn.Net.Listen,
 		rand:         checkstest.ZeroReader{},
 		// Fixture system dirs: t.TempDir() may be under /tmp (see checks tests).
-		systemDirs: []string{filepath.Join(h.root, "hostfs/etc")},
+		systemDirs:    []string{filepath.Join(h.root, "hostfs/etc")},
+		getwd:         func() (string, error) { return h.cwd, nil },
+		defaultSocket: h.sock,
+		gitPaths:      []string{filepath.Join(h.root, "bin/git")},
+		gitInit: func(_ context.Context, bin, dir, home string) error {
+			h.gits = append(h.gits, dir)
+			return os.MkdirAll(filepath.Join(dir, ".git"), 0o700)
+		},
+	}
+	if h.envHook != nil {
+		h.envHook(e)
 	}
 	code := run(e, append([]string{"warden"}, args...))
 	return result{code, out.String(), errb.String()}

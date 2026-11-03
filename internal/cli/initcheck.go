@@ -68,7 +68,13 @@ func runInit(e *env, jsonOut bool) int {
 		}
 	}
 	cfgFile := dirs.ConfigFile()
-	if _, err := os.Lstat(cfgFile); errors.Is(err, fs.ErrNotExist) {
+	summary := !jsonOut && e.terminal()
+	_, statErr := os.Lstat(cfgFile)
+	if errors.Is(statErr, fs.ErrNotExist) && summary {
+		if !runGuided(e, dirs, home) {
+			return ExitFail
+		}
+	} else if errors.Is(statErr, fs.ErrNotExist) {
 		q := paths.ShellQuote(cfgFile)
 		fmt.Fprintf(e.stderr, "warden init: no config at %s\n\n%s\nSave it, edit it, then run warden init again:\n  warden init > %s.new; mv %s.new %s\n\n",
 			cfgFile, exampleExplanation, q, q, q)
@@ -76,7 +82,6 @@ func runInit(e *env, jsonOut bool) int {
 		return ExitFail
 	}
 
-	summary := !jsonOut && e.terminal()
 	rep := checks.Run(e.checksEnv(checks.ModeInit, dirs, home))
 	if summary {
 		printSummary(e.stdout, rep)

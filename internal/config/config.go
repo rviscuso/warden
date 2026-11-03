@@ -140,9 +140,7 @@ func (c *Config) Validate() error {
 	if c.Controller.Workspace == "" || !filepath.IsAbs(c.Controller.Workspace) {
 		add("controller.workspace", fmt.Errorf("must be an absolute path, got %q", c.Controller.Workspace))
 	}
-	if !remoteControlName.MatchString(c.Controller.RemoteControlName) {
-		add("controller.remote_control_name", fmt.Errorf("must match %s, got %q", remoteControlName, c.Controller.RemoteControlName))
-	}
+	add("controller.remote_control_name", ValidateRemoteControlName(c.Controller.RemoteControlName))
 
 	r := c.Controller.Resources
 	if r.MemoryMB < MinMemoryMB || r.MemoryMB > MaxMemoryMB {
@@ -270,6 +268,14 @@ func removedFields(data []byte) error {
 	}
 	if _, ok := top["runtime_image"]; ok {
 		return errors.New("config: runtime_image was removed: Warden pins it; delete the line")
+	}
+	return nil
+}
+
+// ValidateRemoteControlName checks controller.remote_control_name.
+func ValidateRemoteControlName(name string) error {
+	if !remoteControlName.MatchString(name) {
+		return fmt.Errorf("must match %s, got %q", remoteControlName, name)
 	}
 	return nil
 }
