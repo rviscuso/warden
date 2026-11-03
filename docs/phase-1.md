@@ -50,7 +50,7 @@ Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
    Anything but `y` keeps the old pin and exits 1. This happens only after every other check passes.
 
 `check` runs the same checks plus `daemon.pin`, read-only: it creates nothing, and fails with
-"run warden init" if a directory or the state file is missing.
+"run warden init" if a directory or the state file is missing. It writes nothing.
 
 `state.json` (0600, written atomically) holds:
 `{version: 1, warden_version, daemon: {id, socket, server_version, runc, containerd, compose}, initialized_at}`.
@@ -93,6 +93,7 @@ internal/proxy/        the egress proxy: allowlist, CONNECT handling, connection
 internal/compose/      typed compose file, Render (the only producer of compose JSON) and Validate
 internal/canary/       the in-container probe (warden probe), its output format, the canary project
 internal/wardenbin/    copy and verify the warden binary under <state>/bin/
+internal/netx/         the one way Warden opens a listener: MPTCP off (netx.Listen)
 internal/controller/   compose generation, up/down/status/logs, post-start verification, RC URL
 images/controller/     reference controller image (Dockerfile only)
 images/                contract test for the Dockerfiles under it (images_test.go)
@@ -227,6 +228,14 @@ Precisely:
   per network namespace, so each container gets it whatever the host has); plus `restart: "no"` and `pull_policy: never`.
   Seccomp and AppArmor are left at Docker's defaults, not named: naming `apparmor=docker-default`
   would stop containers starting on a host without AppArmor. The canary verifies both.
+- MPTCP in Warden's own binary (see `DESIGN.md` §2, CVE-2026-98432): `go.mod` has
+  `godebug multipathtcp=0`, so every listener and dialer defaults to plain TCP, and every listener
+  Warden opens goes through `netx.Listen`, whose `net.ListenConfig` has `SetMultipathTCP(false)`
+  explicitly: the proxy's (`warden proxy`) and the canary's `no-host` listener on the host. A test
+  refuses any other listener in non-test code. Tests: the config reports `MultipathTCP() == false`;
+  a client dialing with `SetMultipathTCP(true)` gets a connection whose `MultipathTCP()` is false
+  (SKIP, never pass, where the kernel can't do MPTCP, which a control listener with MPTCP on shows);
+  and the build info's `DefaultGODEBUG` contains `multipathtcp=0`.
 - MPTCP: the goal is no MPTCP in the sandbox, and a kernel without MPTCP meets it, so Warden runs on
   one. `hardening.HostMPTCP` looks for `/proc/sys/net/mptcp` on the host: present, the sysctl is set;
   absent (`CONFIG_MPTCP` is built in, never a module, so the kernel has no MPTCP), no `sysctls` key
@@ -382,7 +391,7 @@ exposes a host path too and is treated exactly like a bind mount of `device`.
 
 No container is skipped by name, label or compose project: those can be set by anyone with Docker
 access. In milestone 2 nothing is skipped at all. Skipping Warden's own containers by the container
-IDs Warden recorded (in state, and from the current canary run) arrives in milestones 4 and 6.
+IDs Warden recorded (in state, and from the current canary run) arrives in milestones 4 and 6 (M6: see "Controller" below).
 Unit tests use recorded `docker inspect` fixtures.
 
 Version strings are compared by their leading `major.minor.patch` (distribution builds add
@@ -559,6 +568,99 @@ Precisely (decided in the M5 review):
 
 `down`: `docker compose -p warden down` (never `-v`). `status`: daemon pin, container states, image,
 start time, last URL. `logs proxy|controller`: the last N lines of that container's log.
+
+Precisely (decided in the M6 review):
+
+- **One proxy definition.** `controller.ProxyService` builds the proxy service; `up` and the canary
+  both use it, so the canary's proxy is the one `up` runs by construction (only the names differ).
+- **The controller service:** `entrypoint: ["claude"]`, `command: ["--remote-control", <name>]`
+  (`entrypoint` is required in every service since M4; `claude` is on the image's `PATH`). The
+  workspace bind is the path `mounts.ValidateWorkspace` resolved, never the configured string.
+  `compose.Validate` allows `tty` and `stdin_open`, and only with the value `true`.
+- **The proxy binary** is `init`'s verified copy, found with `wardenbin.Find`: `up` never installs
+  it and fails with "run warden init" if it's missing.
+- **`up` runs every check first, the canary included**, exactly as `check` does, read-only, before
+  anything is shown: config, workspace, host and daemon checks, `daemon.pin`, `host.shared-mounts`
+  (which is what catches a shared folder) and the canary. Any failure stops `up` with the check
+  table. No canary result is ever recorded: a record could only say the sandbox was safe when it
+  was recorded, and the kernel, AppArmor or the daemon can change before `up`. A canary takes about
+  6 s on the operator's host, small next to the rest of `up`.
+- **Before anything is shown**, after the checks: mount validation re-run; the binary copy
+  verified; the agent home created (`agents/` and `agents/controller/`, 0700) or, if it exists,
+  required to be a private directory of the user. `down`, `status` and `logs` check the pin too: a
+  different daemon's containers mean nothing to Warden.
+- **MPTCP status is three-state.** `hardening.MPTCP` is `MPTCPUnknown` (the zero value),
+  `MPTCPPresent` or `MPTCPAbsent`; `hardening.HostMPTCP` returns one of the last two or an error.
+  `hardening.Settings`, `compose.Validate` and the canary's evaluation refuse `MPTCPUnknown`, so a
+  caller that forgets to set it fails instead of silently dropping the sysctl. `up` reads the
+  host's status exactly as the canary does.
+- **Last applied file.** `state.json` gains an optional `controller` object: `applied_compose`
+  (the exact bytes applied, as a JSON string, so the diff compares bytes), `applied_at`,
+  `proxy_id` and `controller_id` (full container IDs), `remote_control_url`, `url_found_at` and
+  `incident`. `version` stays 1: optional fields are backward compatible. `init` keeps the object
+  when it re-pins the same daemon and drops it when the daemon changes.
+- **Approval.** `up` prints the generated file on stdout, then a line diff against the last
+  applied file (unified style, 3 lines of context, `--- applied` / `+++ new`), or "first apply: no
+  previous file", or "no changes since the last apply". Then `Apply? [y/N]` on stderr. It always
+  asks, even with no changes. Anything but `y` exits 1 with "nothing applied".
+- **Apply.** The shown bytes are written atomically to `<state>/compose/warden.json` (0600;
+  `compose/` 0700) and passed to `docker compose -p warden -f <file> up -d` (5 minutes). The
+  file, the time and both container IDs (`docker inspect --format '{{.Id}}'`) go into state right
+  after `up -d` succeeds, before verification, so a later `check` or `down` knows them.
+- **Post-start verification**, for `warden-proxy` and `warden-controller`:
+  - `docker inspect --format '{{.State.Running}} {{.State.Pid}}'` must be `true` and a PID > 0;
+  - that PID is `docker-init`; its children are found by reading `/proc/*/status` for `PPid`
+    (no dependency on `CONFIG_PROC_CHILDREN`); there must be exactly one, waited for up to 10 s;
+  - for both the init process and its child: `Uid` and `Gid` (all four fields) equal the user's;
+    `CapEff`, `CapBnd`, `CapPrm` and `CapAmb` are zero; `NoNewPrivs` is 1; `Seccomp` is 2.
+- **A verification failure is a security event: the evidence is kept.**
+  - `docker compose -p warden -f <file> stop -t 0`, so the agent stops running at once.
+  - `docker inspect` of both containers is saved to `<state>/incidents/<UTC time>.json` (0600;
+    `incidents/` 0700).
+  - The details and that path are printed, and `up` exits 1. The stopped containers stay in place,
+    and state records the incident.
+  - While an incident is recorded, `up` refuses, with the fix: inspect the containers and the
+    incident file, then `warden down`. `down` removes the containers as usual and clears the
+    incident.
+- **Remote Control URL.** One function, `controller.FindURL`, on
+  `docker logs --since <the container's .State.StartedAt> warden-controller`, so a URL from an
+  earlier run can never match. Polled every 2 s for up to 60 s. ANSI escape sequences (CSI and OSC,
+  including OSC 8 hyperlinks, whose target is kept) are removed before matching
+  `https://claude\.ai/code/\S+`. The **first** match wins: Claude Code prints the URL at startup,
+  before the agent does anything, and a later URL may be one the agent printed (the log is
+  agent-influenced output). If `up -d` kept the recorded controller container (same ID) and a URL is
+  recorded, that URL is kept and the log isn't read. If the controller stops running, the wait ends
+  at once. Found: saved in state and printed.
+- **No URL:** exit 1, the containers keep running, and the message says what to do: first run? log
+  in with `docker attach warden-controller` (detach with Ctrl-P Ctrl-Q), then run `warden status`;
+  or `warden down` to stop.
+- **`status [--json]`:** the pin (if it fails: printed, exit 1, nothing else queried); for each of
+  `warden-proxy` and `warden-controller`: state (or `not found`), image, start time, ID, and whether
+  the ID is the one Warden recorded ("not started by Warden" otherwise); a recorded incident; the
+  last URL and when it was found. If no URL is recorded and the recorded controller is running,
+  `status` looks for one exactly as `up` does (one read, no wait) and records it, which is how the
+  URL arrives after a first login. Containers not running is not a failure: exit 0.
+- **`down`:** pin check, then `docker compose -p warden down` (5 minutes; never `-v`, never `-f`).
+  The container IDs and any incident are cleared from state; the last applied file and URL are kept
+  (the next `up` diffs against it; `status` shows the URL as the last one).
+- **`logs proxy|controller [-n N]`:** pin check, then `docker logs --tail N <container>`, stdout and
+  stderr passed through. A non-zero docker exit is exit 1.
+- **`host.shared-mounts` and Warden's own containers.** A container whose full ID is recorded in
+  state is skipped only if every one of its mounts is one Warden gave it: for the controller, the
+  resolved workspace at `/workspace` and the agent home at `/home/agent`; for the proxy, a
+  `<state>/bin/warden-<sha256>` copy at `/warden`. Any other mount on it is a finding as usual.
+  Never by name or label.
+- **Tests:** a golden file for the generated compose JSON
+  (`internal/controller/testdata/warden.golden.json`, regenerated with `go test
+  ./internal/controller -update`); `up`, `down`, `status` and `logs` end to end against the fake
+  runner with a fixture `/proc`.
+- **Live test** (`TestUpDown`): with `CONTROLLER_IMAGE` given to `e2e.sh`, `warden up` with `y`,
+  post-start verification must pass, `check` must pass while up, `status` must show both running,
+  then `warden down` must leave no `warden-*` container or network. The URL step needs a logged-in
+  agent home, so the test only requires that `up` gets past verification. It reports SKIP without
+  `CONTROLLER_IMAGE`, and also if any `warden-*` container or network already exists: `up` uses the
+  real project name, so the test never touches a Warden that is up. Its containers are recorded
+  for the script's trap and `down` always runs at the end.
 
 ## Prototype results
 

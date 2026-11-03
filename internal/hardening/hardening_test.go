@@ -13,7 +13,7 @@ import (
 var res = Resources{MemoryMB: 1536, CPUs: 1.5, Pids: 512}
 
 func TestSettings(t *testing.T) {
-	f, err := Settings(1000, 1001, res, Host{MPTCP: true})
+	f, err := Settings(1000, 1001, res, Host{MPTCP: MPTCPPresent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestSettings(t *testing.T) {
 
 func TestSettingsRefusesRoot(t *testing.T) {
 	for _, ids := range [][2]int{{0, 1000}, {1000, 0}, {0, 0}, {-1, 1000}, {1000, -1}} {
-		if _, err := Settings(ids[0], ids[1], res, Host{MPTCP: true}); err == nil {
+		if _, err := Settings(ids[0], ids[1], res, Host{MPTCP: MPTCPPresent}); err == nil {
 			t.Errorf("Settings(%d, %d) accepted", ids[0], ids[1])
 		}
 	}
@@ -52,7 +52,7 @@ func TestSettingsRefusesBadResources(t *testing.T) {
 		{0, 1, 64}, {-1, 1, 64}, {256, 0, 64}, {256, -1, 64}, {256, math.NaN(), 64},
 		{256, math.Inf(1), 64}, {256, 1, 0}, {256, 1, -5},
 	} {
-		if _, err := Settings(1000, 1000, r, Host{MPTCP: true}); err == nil {
+		if _, err := Settings(1000, 1000, r, Host{MPTCP: MPTCPPresent}); err == nil {
 			t.Errorf("Settings accepted %+v", r)
 		}
 	}
@@ -62,7 +62,7 @@ func TestProxyResources(t *testing.T) {
 	if ProxyResources != (Resources{256, 0.5, 128}) {
 		t.Fatalf("ProxyResources = %+v", ProxyResources)
 	}
-	if _, err := Settings(1000, 1000, ProxyResources, Host{MPTCP: true}); err != nil {
+	if _, err := Settings(1000, 1000, ProxyResources, Host{MPTCP: MPTCPPresent}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -100,7 +100,7 @@ func TestFieldsCannotExpressUnsafeSettings(t *testing.T) {
 // TestSettingsWithoutMPTCP: on a kernel without MPTCP there is nothing to
 // turn off, and no sysctls key at all.
 func TestSettingsWithoutMPTCP(t *testing.T) {
-	f, err := Settings(1000, 1000, res, Host{MPTCP: false})
+	f, err := Settings(1000, 1000, res, Host{MPTCP: MPTCPAbsent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestSettingsWithoutMPTCP(t *testing.T) {
 	if strings.Contains(string(b), "sysctls") {
 		t.Fatalf("rendered %s", b)
 	}
-	f, _ = Settings(1000, 1000, res, Host{MPTCP: true})
+	f, _ = Settings(1000, 1000, res, Host{MPTCP: MPTCPPresent})
 	if b, _ := json.Marshal(f); !strings.Contains(string(b), `"sysctls":{"net.mptcp.enabled":"0"}`) {
 		t.Fatalf("rendered %s", b)
 	}
@@ -119,11 +119,11 @@ func TestSettingsWithoutMPTCP(t *testing.T) {
 
 func TestHostMPTCP(t *testing.T) {
 	root := t.TempDir()
-	if got, err := HostMPTCP(root); got || err != nil {
+	if got, err := HostMPTCP(root); got != MPTCPAbsent || err != nil {
 		t.Fatalf("no /proc/sys/net/mptcp: %v %v", got, err)
 	}
 	os.MkdirAll(filepath.Join(root, "proc/sys/net/mptcp"), 0o755)
-	if got, err := HostMPTCP(root); !got || err != nil {
+	if got, err := HostMPTCP(root); got != MPTCPPresent || err != nil {
 		t.Fatalf("directory present: %v %v", got, err)
 	}
 	// Anything else fails closed: a file where the directory should be, or
@@ -139,5 +139,18 @@ func TestHostMPTCP(t *testing.T) {
 	os.WriteFile(filepath.Join(blocked, "proc/sys/net"), nil, 0o644) // ENOTDIR, not ENOENT
 	if _, err := HostMPTCP(blocked); err == nil {
 		t.Error("ENOTDIR: no error")
+	}
+}
+
+// TestSettingsRefusesUnknownMPTCP: forgetting the host's MPTCP status is
+// an error, never "no MPTCP".
+func TestSettingsRefusesUnknownMPTCP(t *testing.T) {
+	for _, h := range []Host{{}, {MPTCP: MPTCPUnknown}, {MPTCP: MPTCP(7)}} {
+		if _, err := Settings(1000, 1000, res, h); err == nil || !strings.Contains(err.Error(), "MPTCP status is unknown") {
+			t.Errorf("%+v: %v", h, err)
+		}
+	}
+	if MPTCPUnknown.String() != "unknown" || MPTCPPresent.String() != "present" || MPTCPAbsent.String() != "absent" {
+		t.Error("String")
 	}
 }

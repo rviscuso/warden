@@ -108,3 +108,62 @@ func TestLoadRejects(t *testing.T) {
 		t.Fatalf("good state: %v", err)
 	}
 }
+
+func sampleController() *Controller {
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	return &Controller{
+		AppliedCompose: "{\n  \"name\": \"warden\"\n}\n", AppliedAt: at,
+		ProxyID: strings.Repeat("a", 64), ControllerID: strings.Repeat("b", 64),
+		RemoteControlURL: "https://claude.ai/code/session_x", URLFoundAt: &at,
+	}
+}
+
+// TestControllerRoundTrip: the applied bytes come back exactly.
+func TestControllerRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	s := sample()
+	s.Controller = sampleController()
+	if err := Save(p, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Controller.AppliedCompose != s.Controller.AppliedCompose || got.Controller.ControllerID != s.Controller.ControllerID ||
+		!got.Controller.URLFoundAt.Equal(*s.Controller.URLFoundAt) || !got.Controller.Running() {
+		t.Fatalf("got %+v", got.Controller)
+	}
+}
+
+func TestControllerRejects(t *testing.T) {
+	cases := map[string]func(c *Controller){
+		"no compose":     func(c *Controller) { c.AppliedCompose = "" },
+		"no time":        func(c *Controller) { c.AppliedAt = time.Time{} },
+		"one id":         func(c *Controller) { c.ProxyID = "" },
+		"short id":       func(c *Controller) { c.ProxyID = "abc" },
+		"upper id":       func(c *Controller) { c.ControllerID = strings.Repeat("B", 64) },
+		"other url":      func(c *Controller) { c.RemoteControlURL = "https://example.com/code/x" },
+		"url no time":    func(c *Controller) { c.URLFoundAt = nil },
+		"time no url":    func(c *Controller) { c.RemoteControlURL = "" },
+		"url with space": func(c *Controller) { c.RemoteControlURL = "https://claude.ai/code/a b" },
+	}
+	for name, fn := range cases {
+		s := sample()
+		s.Controller = sampleController()
+		fn(s.Controller)
+		if err := Save(filepath.Join(t.TempDir(), "state.json"), s); err == nil {
+			t.Errorf("%s: saved", name)
+		}
+	}
+	// Down clears both IDs: still valid, not running.
+	c := sampleController()
+	c.ProxyID, c.ControllerID = "", ""
+	if err := c.Validate(); err != nil || c.Running() {
+		t.Fatalf("after down: %v %v", err, c.Running())
+	}
+	var none *Controller
+	if none.Running() {
+		t.Fatal("nil controller running")
+	}
+}

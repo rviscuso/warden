@@ -21,6 +21,7 @@ import (
 	"syscall"
 
 	"github.com/rviscuso/warden/internal/config"
+	"github.com/rviscuso/warden/internal/controller"
 	"github.com/rviscuso/warden/internal/docker"
 	"github.com/rviscuso/warden/internal/mounts"
 	"github.com/rviscuso/warden/internal/paths"
@@ -627,8 +628,6 @@ func (r *run) sharedMounts() {
 		r.pass(id, title, "no containers")
 		return
 	}
-	// TODO(milestones 4 and 6): skip Warden's own containers by the IDs
-	// Warden recorded (state, current canary run). Never by name or label.
 	out, err = r.docker(append([]string{"inspect", "--type", "container"}, ids...)...)
 	if err != nil {
 		r.fail(id, title, oneLine(err), "re-run the check")
@@ -664,11 +663,22 @@ func (r *run) sharedMounts() {
 		}
 	}
 
+	// Warden's own containers, by the full IDs up recorded (never by name or
+	// label), may have exactly the mounts Warden gives them; anything else
+	// on them is a finding like on any container.
+	own := r.ownContainers()
+	var ownSeen []string
 	protected := append([]string{r.rep.Workspace}, r.wardenDirs()...)
 	var findings []string
 	for _, c := range containers {
 		name := strings.TrimPrefix(c.Name, "/")
 		for _, m := range c.Mounts {
+			if role, ok := own[c.ID]; ok && r.ownMount(role, m.Type, m.Source, m.Destination) {
+				if !slices.Contains(ownSeen, role) {
+					ownSeen = append(ownSeen, role)
+				}
+				continue
+			}
 			src, what := "", ""
 			switch m.Type {
 			case "bind":
@@ -709,7 +719,40 @@ func (r *run) sharedMounts() {
 		r.fail(id, title, strings.Join(findings, "; "), fix)
 		return
 	}
-	r.pass(id, title, inspected(len(containers)))
+	detail := inspected(len(containers))
+	if len(ownSeen) > 0 {
+		detail += "; Warden's own mounts allowed on " + strings.Join(ownSeen, ", ") + " (by the container IDs up recorded)"
+	}
+	r.pass(id, title, detail)
+}
+
+// ownContainers maps the container IDs up recorded to their roles. No
+// state, or no running record, means nothing is Warden's.
+func (r *run) ownContainers() map[string]string {
+	st, err := state.Load(r.env.Dirs.StateFile())
+	if err != nil || !st.Controller.Running() {
+		return nil
+	}
+	return map[string]string{st.Controller.ProxyID: controller.ProxyName, st.Controller.ControllerID: controller.ControllerName}
+}
+
+var binCopy = regexp.MustCompile(`^warden-[0-9a-f]{64}$`)
+
+// ownMount reports whether a mount is exactly one Warden gives the
+// container with that role.
+func (r *run) ownMount(role, typ, src, dst string) bool {
+	if typ != "bind" {
+		return false
+	}
+	switch role {
+	case controller.ControllerName:
+		home, err := r.env.Dirs.AgentHome(controller.AgentName)
+		return (src == r.rep.Workspace && dst == controller.WorkspaceTarget) ||
+			(err == nil && src == home && dst == controller.HomeTarget)
+	case controller.ProxyName:
+		return dst == controller.BinaryTarget && filepath.Dir(src) == r.env.Dirs.BinDir() && binCopy.MatchString(filepath.Base(src))
+	}
+	return false
 }
 
 func short(id string) string {

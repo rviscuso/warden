@@ -12,6 +12,7 @@ import (
 	"github.com/rviscuso/warden/internal/checks/checkstest"
 	"github.com/rviscuso/warden/internal/compose"
 	"github.com/rviscuso/warden/internal/docker/dockertest"
+	"github.com/rviscuso/warden/internal/hardening"
 	"github.com/rviscuso/warden/internal/wardenbin/wardenbintest"
 )
 
@@ -67,7 +68,7 @@ func TestCanaryAllPass(t *testing.T) {
 	if len(files) != 3 || string(files[0]) != string(files[1]) || string(files[1]) != string(files[2]) {
 		t.Fatalf("compose stdin: %d files", len(files))
 	}
-	if err := compose.Validate(files[0], compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock, MPTCP: true}); err != nil {
+	if err := compose.Validate(files[0], compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock, MPTCP: hardening.MPTCPPresent}); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(h.env.Dirs.BinDir(), "warden-")
@@ -377,7 +378,7 @@ func TestCanaryHostWithoutMPTCP(t *testing.T) {
 	if len(file) == 0 || strings.Contains(string(file), "sysctls") {
 		t.Fatalf("project for a host without MPTCP:\n%s", file)
 	}
-	if err := compose.Validate(file, compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock, MPTCP: false}); err != nil {
+	if err := compose.Validate(file, compose.Policy{UID: h.env.UID, GID: h.env.GID, Socket: h.sock, MPTCP: hardening.MPTCPAbsent}); err != nil {
 		t.Fatal(err)
 	}
 	// The canary saying MPTCP is off-but-present on such a host fails.

@@ -93,6 +93,7 @@ func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
 	}
 	file := dirs.StateFile()
 	old, err := state.Load(file)
+	var keep *state.Controller // what up applied, if the daemon is the same one
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
@@ -105,12 +106,15 @@ func pinDaemon(e *env, dirs paths.Dirs, d state.Daemon, jsonOut bool) int {
 			fmt.Fprintln(e.stderr, "Kept the existing pin.")
 			return ExitFail
 		}
+	default:
+		keep = old.Controller
 	}
 	s := &state.State{
 		Version:       1,
 		WardenVersion: e.wardenVersion(),
 		Daemon:        d,
 		InitializedAt: e.now().UTC(),
+		Controller:    keep,
 	}
 	if err := state.Save(file, s); err != nil {
 		fmt.Fprintf(e.stderr, "warden init: %v\n", err)
@@ -210,11 +214,12 @@ const exampleConfig = `{
 const exampleExplanation = `An example config is printed on stdout. Fields:
   version                  always 1
   docker.socket            the Docker daemon's socket (optional; this is the default)
-  runtime_image            stock image for Warden's own containers, pinned by digest
-                           (name@sha256:<64 hex>); not used until milestone 4
+  runtime_image            stock image for Warden's own containers (proxy, canary), pinned by
+                           digest (name@sha256:<64 hex>); it must be local: docker pull it first
   egress.allow             hostnames the sandbox may reach; a leading dot allows subdomains
-  controller.image         the controller image ID (sha256:<64 hex>); a placeholder is fine
-                           until milestone 6
+  controller.image         the controller image ID (sha256:<64 hex>): docker build -t
+                           warden-controller images/controller, then
+                           docker image inspect --format '{{.Id}}' warden-controller
   controller.workspace     absolute path of the repository the agent may change
   controller.remote_control_name   name shown in Claude's Remote Control
   controller.resources     memory_mb 256-65536, cpus 0.25-64, pids 64-32768`

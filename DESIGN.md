@@ -71,6 +71,14 @@ agent always getting it right: the boundary holds either way.
 - Allowlisting is by hostname, not URL path. An allowed host is reachable in full.
 - If an allowed host shares a CDN with other sites, a client can reach those sites through it (domain fronting), because the proxy sees only the CONNECT hostname, not what is sent inside TLS.
 - A zero-day in the kernel or Docker can defeat any container boundary. Warden reduces the odds; it does not remove them.
+  - A concrete example is CVE-2026-98432, a use-after-free in Linux's IPv4 TCP code whose demonstrated
+    remote-root exploit needs an MPTCP listener. Go 1.24 and later open MPTCP listeners by default on
+    Linux. The real fix is a patched host kernel, plus a reboot. Until then, Warden:
+    - turns MPTCP off in its own binary: `godebug multipathtcp=0` in `go.mod`, and explicitly on
+      every listener it opens (`internal/netx`), including the canary's listener on the host;
+    - sets `net.mptcp.enabled=0` in every container it starts. The setting is per network
+      namespace, so the host's value doesn't carry into containers; it has to be set in each one;
+    - proves it with `canary.mptcp`: inside the sandbox, an MPTCP socket can't be opened.
 - Containers on a shared internal network can reach each other, so each holds only its own secrets.
 
 ## 3. Architecture

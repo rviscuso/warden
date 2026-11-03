@@ -15,11 +15,11 @@ const (
 	sock      = "/var/run/docker.sock"
 )
 
-var pol = Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: true}
+var pol = Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: hardening.MPTCPPresent}
 
 func validFile(t *testing.T) File {
 	t.Helper()
-	h, err := hardening.Settings(1000, 1000, hardening.ProxyResources, hardening.Host{MPTCP: true})
+	h, err := hardening.Settings(1000, 1000, hardening.ProxyResources, hardening.Host{MPTCP: hardening.MPTCPPresent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,22 +126,26 @@ func TestInvariants(t *testing.T) {
 			v["bind"] = map[string]any{"create_host_path": false, "propagation": "rshared"}
 			s["volumes"] = []any{v}
 		},
-		"relative source":  func(_, s map[string]any) { s["volumes"] = []any{vol("opt/x")} },
-		"unclean source":   func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/../var/run/docker.sock")} },
-		"duplicate target": func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/a"), vol("/opt/b")} },
-		"volume extra key": func(_, s map[string]any) { v := vol("/opt/x"); v["consistency"] = "cached"; s["volumes"] = []any{v} },
-		"volumes_from":     func(_, s map[string]any) { s["volumes_from"] = []any{"other"} },
-		"userns_mode host": func(_, s map[string]any) { s["userns_mode"] = "host" },
-		"uts host":         func(_, s map[string]any) { s["uts"] = "host" },
-		"cgroup host":      func(_, s map[string]any) { s["cgroup"] = "host" },
-		"cgroup_parent":    func(_, s map[string]any) { s["cgroup_parent"] = "/" },
-		"ports":            func(_, s map[string]any) { s["ports"] = []any{"3128:3128"} },
-		"sysctls":          func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.ipv4.ip_forward": "1"} },
-		"sysctls missing":  func(_, s map[string]any) { delete(s, "sysctls") },
-		"sysctls empty":    func(_, s map[string]any) { s["sysctls"] = map[string]any{} },
-		"mptcp on":         func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.mptcp.enabled": "1"} },
-		"mptcp number":     func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.mptcp.enabled": 0} },
-		"sysctls list":     func(_, s map[string]any) { s["sysctls"] = []any{"net.mptcp.enabled=0"} },
+		"relative source":   func(_, s map[string]any) { s["volumes"] = []any{vol("opt/x")} },
+		"unclean source":    func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/../var/run/docker.sock")} },
+		"duplicate target":  func(_, s map[string]any) { s["volumes"] = []any{vol("/opt/a"), vol("/opt/b")} },
+		"volume extra key":  func(_, s map[string]any) { v := vol("/opt/x"); v["consistency"] = "cached"; s["volumes"] = []any{v} },
+		"volumes_from":      func(_, s map[string]any) { s["volumes_from"] = []any{"other"} },
+		"userns_mode host":  func(_, s map[string]any) { s["userns_mode"] = "host" },
+		"uts host":          func(_, s map[string]any) { s["uts"] = "host" },
+		"cgroup host":       func(_, s map[string]any) { s["cgroup"] = "host" },
+		"cgroup_parent":     func(_, s map[string]any) { s["cgroup_parent"] = "/" },
+		"ports":             func(_, s map[string]any) { s["ports"] = []any{"3128:3128"} },
+		"sysctls":           func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.ipv4.ip_forward": "1"} },
+		"tty false":         func(_, s map[string]any) { s["tty"] = false },
+		"tty string":        func(_, s map[string]any) { s["tty"] = "true" },
+		"stdin_open false":  func(_, s map[string]any) { s["stdin_open"] = false },
+		"stdin_open number": func(_, s map[string]any) { s["stdin_open"] = 1 },
+		"sysctls missing":   func(_, s map[string]any) { delete(s, "sysctls") },
+		"sysctls empty":     func(_, s map[string]any) { s["sysctls"] = map[string]any{} },
+		"mptcp on":          func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.mptcp.enabled": "1"} },
+		"mptcp number":      func(_, s map[string]any) { s["sysctls"] = map[string]any{"net.mptcp.enabled": 0} },
+		"sysctls list":      func(_, s map[string]any) { s["sysctls"] = []any{"net.mptcp.enabled=0"} },
 		"sysctls extra": func(_, s map[string]any) {
 			s["sysctls"] = map[string]any{"net.mptcp.enabled": "0", "net.ipv4.ip_forward": "1"}
 		},
@@ -200,7 +204,7 @@ func TestRenderRefusesSocketMounts(t *testing.T) {
 	linkDir := filepath.Join(dir, "rundir")
 	os.Symlink("/var/run", linkDir)
 
-	p := Policy{UID: 1000, GID: 1000, Socket: custom, MPTCP: true}
+	p := Policy{UID: 1000, GID: 1000, Socket: custom, MPTCP: hardening.MPTCPPresent}
 	for _, src := range []string{custom, dir, link, "/var/run/docker.sock", "/run", linkDir} {
 		f := validFile(t)
 		s := f.Services["proxy"]
@@ -217,7 +221,7 @@ func TestValidateRefusesRootPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []Policy{{0, 1000, sock, true}, {1000, 0, sock, true}} {
+	for _, p := range []Policy{{0, 1000, sock, hardening.MPTCPPresent}, {1000, 0, sock, hardening.MPTCPPresent}} {
 		if err := Validate(b, p); err == nil {
 			t.Errorf("policy %+v accepted", p)
 		}
@@ -234,7 +238,7 @@ func TestValidateRefusesTrailingData(t *testing.T) {
 // TestNoMPTCPHost: on a kernel without MPTCP the file has no sysctls, and
 // Validate requires exactly that; each policy refuses the other's form.
 func TestNoMPTCPHost(t *testing.T) {
-	noMPTCP := Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: false}
+	noMPTCP := Policy{UID: 1000, GID: 1000, Socket: sock, MPTCP: hardening.MPTCPAbsent}
 	f := validFile(t)
 	for k, s := range f.Services {
 		s.Sysctls = nil
@@ -269,5 +273,36 @@ func TestNoMPTCPHost(t *testing.T) {
 		if err := Validate(out, noMPTCP); err == nil {
 			t.Errorf("%s: accepted on a host without MPTCP", name)
 		}
+	}
+}
+
+// TestTTY: the controller's interactive terminal renders and validates.
+func TestTTY(t *testing.T) {
+	f := validFile(t)
+	s := f.Services["proxy"]
+	s.TTY, s.StdinOpen = true, true
+	f.Services["proxy"] = s
+	b, err := Render(f, pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"tty": true`) || !strings.Contains(string(b), `"stdin_open": true`) {
+		t.Fatalf("rendered:\n%s", b)
+	}
+}
+
+// TestValidateRefusesUnknownMPTCP: a policy that doesn't state the host's
+// MPTCP status validates nothing, whatever the file says.
+func TestValidateRefusesUnknownMPTCP(t *testing.T) {
+	with, err := Render(validFile(t), pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := Policy{UID: 1000, GID: 1000, Socket: sock}
+	if err := Validate(with, unknown); err == nil || !strings.Contains(err.Error(), "MPTCP status is unknown") {
+		t.Fatalf("with sysctls: %v", err)
+	}
+	if _, err := Render(validFile(t), unknown); err == nil {
+		t.Fatal("Render accepted an unknown MPTCP policy")
 	}
 }

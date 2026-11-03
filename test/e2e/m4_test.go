@@ -160,7 +160,7 @@ func TestCanaryNegativeControl(t *testing.T) {
 		got[v.ID] = v
 	}
 	mustFail := []string{"canary.caps", "canary.nnp", "canary.rootfs", "canary.uid"}
-	if mptcp {
+	if mptcp == hardening.MPTCPPresent {
 		// Without MPTCP in the kernel there is nothing to turn off: an
 		// unhardened container passes canary.mptcp there, correctly.
 		mustFail = append(mustFail, "canary.mptcp")

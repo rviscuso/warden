@@ -1,0 +1,144 @@
+{
+  "name": "warden",
+  "services": {
+    "controller": {
+      "user": "1000:1000",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "read_only": true,
+      "tmpfs": [
+        "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777"
+      ],
+      "mem_limit": 1610612736,
+      "memswap_limit": 1610612736,
+      "cpus": 1.5,
+      "pids_limit": 512,
+      "init": true,
+      "ipc": "private",
+      "cgroup": "private",
+      "sysctls": {
+        "net.mptcp.enabled": "0"
+      },
+      "restart": "no",
+      "pull_policy": "never",
+      "container_name": "warden-controller",
+      "image": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "entrypoint": [
+        "claude"
+      ],
+      "command": [
+        "--remote-control",
+        "warden"
+      ],
+      "environment": {
+        "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
+        "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_ERROR_REPORTING": "1",
+        "DISABLE_TELEMETRY": "1",
+        "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+        "HTTPS_PROXY": "http://warden-proxy:3128",
+        "https_proxy": "http://warden-proxy:3128"
+      },
+      "networks": [
+        "sandbox"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/srv/repo",
+          "target": "/workspace",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/srv/share/warden/agents/controller",
+          "target": "/home/agent",
+          "read_only": false,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "depends_on": [
+        "proxy"
+      ],
+      "tty": true,
+      "stdin_open": true
+    },
+    "proxy": {
+      "user": "1000:1000",
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "read_only": true,
+      "tmpfs": [
+        "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777"
+      ],
+      "mem_limit": 268435456,
+      "memswap_limit": 268435456,
+      "cpus": 0.5,
+      "pids_limit": 128,
+      "init": true,
+      "ipc": "private",
+      "cgroup": "private",
+      "sysctls": {
+        "net.mptcp.enabled": "0"
+      },
+      "restart": "no",
+      "pull_policy": "never",
+      "container_name": "warden-proxy",
+      "image": "busybox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "entrypoint": [
+        "/warden"
+      ],
+      "command": [
+        "proxy",
+        "--listen",
+        ":3128",
+        "--allow",
+        "api.anthropic.com",
+        "--allow",
+        "platform.claude.com",
+        "--ports",
+        "443"
+      ],
+      "environment": {
+        "WARDEN_ROLE": "proxy"
+      },
+      "networks": [
+        "sandbox",
+        "egress"
+      ],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/srv/state/warden/bin/warden-0123",
+          "target": "/warden",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ]
+    }
+  },
+  "networks": {
+    "egress": {
+      "name": "warden-egress"
+    },
+    "sandbox": {
+      "name": "warden-sandbox",
+      "internal": true
+    }
+  }
+}

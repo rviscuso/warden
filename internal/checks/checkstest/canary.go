@@ -15,6 +15,7 @@ import (
 
 	"github.com/rviscuso/warden/internal/canary"
 	"github.com/rviscuso/warden/internal/docker/dockertest"
+	"github.com/rviscuso/warden/internal/netx"
 	"github.com/rviscuso/warden/internal/wardenbin/wardenbintest"
 )
 
@@ -92,7 +93,7 @@ func (n *HostNet) Listen(network, address string) (net.Listener, error) {
 	if n.ListenErr != nil {
 		return nil, n.ListenErr
 	}
-	return net.Listen("tcp", "127.0.0.1:0")
+	return netx.Listen(context.Background(), "tcp", "127.0.0.1:0")
 }
 
 // Listened returns the addresses Listen was asked for.

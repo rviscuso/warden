@@ -11,15 +11,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
 // State is the whole of state.json.
 type State struct {
-	Version       int       `json:"version"`
-	WardenVersion string    `json:"warden_version"`
-	Daemon        Daemon    `json:"daemon"`
-	InitializedAt time.Time `json:"initialized_at"`
+	Version       int         `json:"version"`
+	WardenVersion string      `json:"warden_version"`
+	Daemon        Daemon      `json:"daemon"`
+	InitializedAt time.Time   `json:"initialized_at"`
+	Controller    *Controller `json:"controller,omitempty"` // set by up
 }
 
 // Daemon is the pinned daemon and the versions seen when it was pinned.
@@ -32,6 +34,50 @@ type Daemon struct {
 	Compose       string `json:"compose"`
 }
 
+// Controller is what up applied: the exact compose bytes, the containers
+// it started (cleared by down) and the last Remote Control URL.
+type Controller struct {
+	AppliedCompose   string     `json:"applied_compose"`
+	AppliedAt        time.Time  `json:"applied_at"`
+	ProxyID          string     `json:"proxy_id,omitempty"`
+	ControllerID     string     `json:"controller_id,omitempty"`
+	RemoteControlURL string     `json:"remote_control_url,omitempty"`
+	URLFoundAt       *time.Time `json:"url_found_at,omitempty"`
+	// Incident is the evidence file of a failed post-start verification: the
+	// containers were stopped and kept. up refuses until down clears it.
+	Incident string `json:"incident,omitempty"`
+}
+
+var (
+	containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// RemoteControlURL is the URL pattern up looks for in the controller's log.
+	RemoteControlURL = regexp.MustCompile(`^https://claude\.ai/code/\S+$`)
+)
+
+// Validate checks the controller record.
+func (c *Controller) Validate() error {
+	switch {
+	case c.AppliedCompose == "":
+		return errors.New("state: controller.applied_compose is empty")
+	case c.AppliedAt.IsZero():
+		return errors.New("state: controller.applied_at is missing")
+	case (c.ProxyID == "") != (c.ControllerID == ""):
+		return errors.New("state: controller: proxy_id and controller_id must be set together")
+	case c.ProxyID != "" && (!containerID.MatchString(c.ProxyID) || !containerID.MatchString(c.ControllerID)):
+		return errors.New("state: controller: container IDs must be 64 hex characters")
+	case c.RemoteControlURL != "" && !RemoteControlURL.MatchString(c.RemoteControlURL):
+		return fmt.Errorf("state: controller.remote_control_url %q is not a Remote Control URL", c.RemoteControlURL)
+	case (c.RemoteControlURL == "") != (c.URLFoundAt == nil):
+		return errors.New("state: controller: remote_control_url and url_found_at must be set together")
+	case c.Incident != "" && !filepath.IsAbs(c.Incident):
+		return fmt.Errorf("state: controller.incident %q is not an absolute path", c.Incident)
+	}
+	return nil
+}
+
+// Running reports whether up recorded containers that down hasn't cleared.
+func (c *Controller) Running() bool { return c != nil && c.ControllerID != "" }
+
 // Validate checks the fields the pin depends on.
 func (s *State) Validate() error {
 	switch {
@@ -43,6 +89,9 @@ func (s *State) Validate() error {
 		return fmt.Errorf("state: daemon.socket %q is not an absolute path", s.Daemon.Socket)
 	case s.InitializedAt.IsZero():
 		return errors.New("state: initialized_at is missing")
+	}
+	if s.Controller != nil {
+		return s.Controller.Validate()
 	}
 	return nil
 }
