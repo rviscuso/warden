@@ -145,6 +145,18 @@ Order:
 printed in full with its fix. On success: `All checks passed. Pinned daemon <id> at <socket>.` and
 `Next: warden up`.
 
+**Decided in the M7 review** (confirmed as implemented):
+- Declining the pull, or a failed pull, doesn't stop `init`: the config is still offered, and
+  `canary.image` then fails with the `docker pull` fix.
+- The config stores the resolved workspace path, the one that was validated.
+- A typed `name@sha256:` reference is written to the config as its image ID.
+- git is looked for before "Create it and run git init?"; without it nothing is created. If
+  `git init` fails after the folder was made, `init` stops and leaves the folder.
+- The summary prints any check outside the four groups in full.
+- EOF counts as no answer, even after a partial line.
+- The live test reports SKIP on a non-default socket (the guided init doesn't ask for one).
+- The build output streams as it runs, through `internal/termsafe` (see step 6).
+
 **Config change:** `runtime_image` is removed from config. A config that still has it fails with
 "runtime_image was removed: Warden pins it; delete the line". `version` stays 1 (phase 1 hasn't
 been released).
