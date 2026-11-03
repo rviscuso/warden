@@ -29,6 +29,11 @@ GO_IMAGE=${GO_IMAGE:-$GO_IMAGE_PINNED}
 [[ -n $GO_IMAGE ]] || die "no Go image digest pinned yet: set GO_IMAGE=golang@sha256:<64 hex>"
 [[ $GO_IMAGE =~ ^[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || die "GO_IMAGE must be pinned by digest (name@sha256:<64 hex>), not a tag: $GO_IMAGE"
 
+# Optional: WARDEN_E2E_BUILD=1 also tests the guided init's reference build (takes
+# minutes and network; the built image is removed afterwards unless it already existed).
+WARDEN_E2E_BUILD=${WARDEN_E2E_BUILD:-}
+[[ -z $WARDEN_E2E_BUILD || $WARDEN_E2E_BUILD == 1 ]] || die "WARDEN_E2E_BUILD must be 1 or unset"
+
 # Optional: the controller image you built (images/controller), by image ID or digest,
 # for TestControllerImage. Without it that test reports SKIP. Never built or pulled here.
 CONTROLLER_IMAGE=${CONTROLLER_IMAGE:-}
@@ -92,6 +97,7 @@ echo "e2e: testing $SHA"
 echo "e2e: Go image $GO_IMAGE"
 echo "e2e: runtime image $RUNTIME_IMAGE"
 echo "e2e: controller image ${CONTROLLER_IMAGE:-none (TestControllerImage will SKIP)}"
+if [[ -n $WARDEN_E2E_BUILD ]]; then echo "e2e: reference build on"; else echo "e2e: reference build off (WARDEN_E2E_BUILD=1 to test it)"; fi
 
 # One container per step, argv only. The source is read-only.
 in_go() {
@@ -128,6 +134,7 @@ env \
 	WARDEN_E2E_SHA="$SHA" \
 	WARDEN_E2E_GO_IMAGE="$GO_IMAGE" \
 	WARDEN_E2E_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
+	WARDEN_E2E_BUILD="$WARDEN_E2E_BUILD" \
 	WARDEN_E2E_CONTAINERS="$ROOT/containers" \
 	WARDEN_E2E_SOCKET="$SOCKET" \
 	WARDEN_E2E_WORKSPACE="$ROOT/ws" \
