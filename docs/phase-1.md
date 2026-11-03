@@ -40,10 +40,12 @@ Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
 `init`:
 1. Creates the config, state and share directories (0700) if missing; an existing one that is
    looser than 0700 or not the user's fails with the exact fix.
-2. If `config.json` is missing: fails (exit 1), naming the config path on stderr, and prints a
-   valid example config to stdout with a short explanation of each field on stderr (so stdout can
-   be redirected straight into the file). JSON has no comments, so none are written. In milestone 2
-   a placeholder `sha256:` for `controller.image` is fine: nothing uses the image yet.
+2. If `config.json` is missing and stdin is a terminal (and there is no `--json`): the guided
+   setup below (milestone 7). Otherwise, if it is missing: fails (exit 1), naming the config path
+   on stderr, and prints a valid example config to stdout with a short explanation of each field on
+   stderr (so stdout can be redirected straight into the file). JSON has no comments, so none are
+   written. The example's `controller.image` is an all-zero placeholder; the explanation says to
+   run `warden init` in a terminal to build the reference image.
 3. Runs every check except `daemon.pin`. On any fail: exit 1, state unchanged.
 4. Pins the daemon. If a pin exists with a different daemon ID or socket, re-pinning is a trust
    change: it prints the old and new values and asks `Re-pin to the new daemon? [y/N]` (on stderr).
@@ -55,6 +57,108 @@ Exit codes: 0 success, 1 a check failed or the operation failed, 2 usage error.
 `state.json` (0600, written atomically) holds:
 `{version: 1, warden_version, daemon: {id, socket, server_version, runc, containerd, compose}, initialized_at}`.
 `warden_version` comes from build info. `daemon.pin` compares both the daemon ID and the socket.
+
+On a terminal (stdin is a terminal and no `--json`), `init` prints its checks as one summary line
+per group instead of the table (see "Guided init"). `check` always prints the full table.
+
+## Guided init (milestone 7)
+
+Decided with the operator before M7. Interactive only when stdin is a terminal, detected with the
+`TCGETS` ioctl (a character-device test would count `/dev/null`). Without a terminal, or with
+`--json`, `init` behaves exactly as above: it never prompts, pulls, builds or creates anything
+beyond its directories. The guided setup runs only when `config.json` is missing; with a config,
+`init` runs the checks as usual.
+
+- **Prompts** go to stderr, one line each, reading one line from stdin. A default is shown in
+  `[brackets]`; Enter accepts it. EOF at any prompt stops `init`: exit 1, nothing written.
+- **Every answer is validated as entered**, with the same rules as config validation and mount
+  validation. A refusal is one line: the reason, and how to write what was meant (for example
+  `https://github.com/x` → "write it as github.com"; `*.example.com` → "write it as
+  .example.com"; a relative path → "use an absolute path: <cwd>/<input>"). Then the prompt
+  repeats.
+- **The directories** (config, state, share) are created first, as today: the runner needs
+  `<state>/docker-config`.
+
+Order:
+
+1. **Workspace** `[<current directory>]`: the default is shown only if the current directory passes
+   mount validation. An existing path must pass mount validation. A path that doesn't exist is
+   checked before anything is created: its parent must exist, be a directory and be the user's,
+   and the would-be path (resolved parent plus the last component) must pass every forbidden-path
+   rule. Then: `Create it and run git init? [y/N]`. Anything but `y` asks for the workspace again.
+   On `y`:
+   - `os.Mkdir` of the last component only, mode 0700; the directory must then be empty;
+   - `git init -q -b main --template= <path>` on the host, the only time Warden ever runs git on
+     the host, and only in that folder it has just created. `git` comes from a fixed path list
+     (`/usr/bin/git`, `/usr/local/bin/git`), argv only, 30 s timeout, working directory `/`, with a
+     clean environment: `PATH=/usr/sbin:/usr/bin:/sbin:/bin`, `HOME`, `GIT_CONFIG_NOSYSTEM=1`,
+     `GIT_CONFIG_GLOBAL=/dev/null`. So no system or user git config and no hook template applies;
+   - mount validation runs again on the created folder;
+   - if any step fails, `init` stops (exit 1) with the error and the folder's path; Warden never
+     removes a folder.
+   Warden never runs git in an existing workspace.
+2. **Allowed domains**: `api.anthropic.com` and `platform.claude.com` are always included and
+   printed as such. `Add a domain (Enter to finish):` repeats; each entry is validated as an
+   allowlist entry. A duplicate, including either built-in, gets "already included".
+3. **Limits**: `Memory in MB [1536]`, `CPUs [1.5]`, `Process limit [512]`, each with its range.
+4. **Remote Control name** `[warden]`.
+5. **Runtime image**: the busybox digest pinned in code (`images.RuntimeImage`). There is no prompt
+   for it and no config field. If it is local: one line, `✓ runtime image <ref>`. If not:
+   `✗ runtime image not on this machine.`, the command `docker pull <ref>`, then
+   `Pull it now? [y/N]`. On `y`: `docker pull <ref>` (10 minutes), then it must be local. On
+   anything else, or if the pull fails: `init` continues; the checks will fail `canary.image` with
+   the fix. Only that image, only by that digest.
+6. **Controller image**: `Controller image ID, or "build" [<default>]`.
+   - The default is the recorded reference build (below) if it is still usable, otherwise `build`.
+   - An entered ID must be a valid image reference, be local and pass the contract check.
+   - `build`: requires `docker buildx version` to succeed (otherwise one line with the install hint
+     and the prompt repeats). Then one line naming the Claude Code version, the base image digest
+     and the Debian packages, all parsed from the embedded Dockerfile; the exact build command; and
+     `Build it now? [y/N]`. Anything but `y` asks for the controller image again.
+   - **The build**: the Dockerfile compiled into the binary (`go:embed` of
+     `images/controller/Dockerfile` in package `images`; the contract test still covers that file)
+     is written to a fresh `<state>/build/<random>/context/` (directories 0700) holding nothing else.
+     `docker buildx build --progress=plain --iidfile <state>/build/<random>/iid <context>`, 20 minutes,
+     with Warden's empty Docker config, so buildx uses its default builder on the pinned daemon.
+     The build cache is allowed. Output: one `building…` line; on failure, the last 20 lines of
+     the build output. The build directory is always removed.
+   - **The contract check** (for a built or an entered image), from `docker image inspect`: `Os`
+     `linux` and `Architecture` the host's; `Config.User` set and not root (`0`, `root`, `0:…`,
+     `root:…`); no `Entrypoint` and no `Cmd`; `WorkingDir` `/workspace`; `Env` has
+     `HOME=/home/agent` and `DISABLE_AUTOUPDATER=1`.
+   - **The reference build record**: after a build passes the contract check, `<state>/reference-image.json`
+     (0600, atomic) holds `{image_id, dockerfile_sha256, built_at}`. A later guided `init` offers it as
+     the default only if the image is still local, passes the contract check, and
+     `dockerfile_sha256` equals the embedded Dockerfile's. A Docker label can't serve: anyone with
+     Docker access can set one. The state directory is never mounted.
+7. **Review**: the full config is printed on stdout, then `Write it to <path> (mode 0600)? [y/N]`.
+   Anything but `y` writes nothing and exits 1. On `y` it is written with exclusive create (if a
+   config appeared meanwhile, `init` fails) in exactly the shown bytes. The docker socket is the
+   default and isn't asked. A created workspace, a pulled image or a built image stays either way.
+8. **Checks**: every check and the canary, then the daemon pin, as in a normal `init`.
+
+**Summary output** (guided, and any `init` on a terminal): one line per group, in the order
+`config` (`config.valid`, `workspace.valid`), `host`, `daemon`, `canary`; for example
+`✓ host     7 passed` or `✗ canary   1 failed, 15 passed`. Every failing or warning check is then
+printed in full with its fix. On success: `All checks passed. Pinned daemon <id> at <socket>.` and
+`Next: warden up`.
+
+**Config change:** `runtime_image` is removed from config. A config that still has it fails with
+"runtime_image was removed: Warden pins it; delete the line". `version` stays 1 (phase 1 hasn't
+been released).
+
+**Tests:** unit tests drive the whole flow through the CLI with a fake terminal check, a scripted
+stdin, a fake runner and a fake git, including every refusal, EOF at each prompt, `N` at each
+question, and the non-terminal path unchanged. **Live test** (`TestGuidedInit`): drives `warden
+init` through a pseudo-terminal (`/dev/ptmx`, standard library `syscall` only) with scripted answers:
+a workspace that doesn't exist yet (created and `git init`ed), one added domain, defaults
+elsewhere, `CONTROLLER_IMAGE` as the controller image, `y` at the review; the checks and canary must
+pass, the config must be 0600 with those values, and the workspace must have `HEAD` on `main`.
+Nothing is pulled: the pinned busybox must already be local, or the live tests fail with the
+`docker pull` command. The build path is opt-in with `WARDEN_E2E_BUILD=1` (time and network): it
+answers `build` and `y`, checks the built image against the contract, and that a second guided
+`init` offers it as the default; the built image is removed at the end unless it existed before.
+SKIP without `CONTROLLER_IMAGE` (unless `WARDEN_E2E_BUILD=1`).
 
 ## Directories
 
@@ -112,7 +216,6 @@ no special privileges and no network:
 {
   "version": 1,
   "docker": { "socket": "/var/run/docker.sock" },
-  "runtime_image": "busybox@sha256:…",
   "egress": {
     "allow": ["api.anthropic.com", "platform.claude.com"]
   },
@@ -125,9 +228,9 @@ no special privileges and no network:
 }
 ```
 
-`runtime_image` is the one stock image Warden's own containers (canary and proxy) run from,
-with the `warden` binary mounted read-only. It needs a shell and `nc` for the canary probe;
-busybox fits.
+The **runtime image** is the one stock image Warden's own containers (canary and proxy) run from,
+with the `warden` binary mounted read-only: busybox, pinned by digest in code
+(`images.RuntimeImage`), with no config field (since M7).
 
 There is no UID field: the agent always runs as the invoking user's UID and GID, taken at runtime.
 There is no field for privileged mode, capabilities, host namespaces, devices, extra mounts, ports
@@ -340,7 +443,7 @@ Precisely:
   `dial failed …` or `dial timed out …`.
 - Domain fronting is not checked (no SNI inspection); see `DESIGN.md` §2.
 
-Proxy container: `runtime_image`, the `warden` binary bind-mounted read-only, command
+Proxy container: the runtime image, the `warden` binary bind-mounted read-only, command
 `warden proxy --listen :3128 --allow … --ports 443`, `WARDEN_ROLE=proxy`, hardening from
 `internal/hardening`, on both networks, container name `warden-proxy`.
 
@@ -415,7 +518,7 @@ cgroup v1, no AppArmor, unreachable.
 
 **Canary** (`init` and `check` only)
 
-- `runtime_image` must be pinned by digest, or the check fails.
+- The runtime image is `images.RuntimeImage`, pinned by digest in code.
 - Warden creates temporary `warden-canary-sandbox` (internal) and `warden-canary-egress` networks,
   starts a temporary proxy exactly as `up` would (allowlist from config), and starts the canary as the
   user's UID:GID with `hardening.Settings(...)` on the sandbox network, with a temporary directory from
@@ -424,14 +527,14 @@ cgroup v1, no AppArmor, unreachable.
 
 Precisely:
 
-- `runtime_image` may be `name@sha256:…` or a local image ID `sha256:…` (both are content
-  addresses). `canary.image` checks that it is local (`docker image inspect`); Warden never pulls
-  (every service has `pull_policy: never`). The fix is `docker pull <ref>` for a digest reference.
+- `canary.image` checks that the runtime image is local (`docker image inspect`). Warden pulls
+  it only in the guided `init`, on `y`; no service ever pulls
+  (every service has `pull_policy: never`). The fix is `docker pull <ref>`, or `warden init` on a terminal.
 - The canary runs only if every earlier check passed or warned; otherwise every `canary.*` check is
   `not run: depends on <first failed check>`. If setup fails, every remaining `canary.*` check fails
   with that error.
 - **The probe is `warden probe`**, a hidden subcommand that refuses to run unless
-  `WARDEN_ROLE=canary`. It runs from the same mounted binary as the proxy, so `runtime_image` needs
+  `WARDEN_ROLE=canary`. It runs from the same mounted binary as the proxy, so the runtime image needs
   no shell and no `nc`. It only reports what it observes; Warden decides on the host. Its output is
   strict: an unknown, missing or duplicate key fails the canary.
 - **The binary.** `init` copies the running binary (`os.Executable`) to `<state>/bin/warden-<sha256>`,
@@ -463,7 +566,7 @@ Precisely:
 
 | ID | Assertion |
 |---|---|
-| canary.image | `runtime_image` is local; never pulled |
+| canary.image | The runtime image is local; never pulled by the canary |
 | canary.caps | `CapEff` and `CapBnd` are `0000000000000000` |
 | canary.nnp | `NoNewPrivs` is `1` |
 | canary.seccomp | `Seccomp` is `2` |
@@ -485,7 +588,7 @@ Precisely:
 
 ## Reference controller image (`images/controller/Dockerfile`)
 
-Built by the user for now (`docker build`), then referenced in config by image ID. It follows the
+Built by the guided `init` from the copy compiled into the binary (see "Guided init"), or by the user, then referenced in config by image ID. It follows the
 image contract in `DESIGN.md`:
 - `debian:trixie-slim` base (Debian 13, the current stable release; bookworm is past its regular
   security support), pinned by digest (`sha256:f6b08b09…3ec4`, recorded on the operator's host on
@@ -720,7 +823,7 @@ on the host with Docker access, which is root-equivalent.
   public name that resolves to `127.0.0.1`, and expects the non-public-address refusal; if the name
   doesn't resolve only to loopback addresses at test time, it reports SKIP, never a pass.
 - The canary live tests run `warden init` and `warden check` with the real canary, using
-  `runtime_image` pinned in `scripts/e2e.sh` (overridable with `RUNTIME_IMAGE`, digest only), and
+  the runtime image pinned in code (it must already be local), and
   check afterwards that no canary container, network or directory is left. A **negative control**
   runs `warden probe` in a deliberately unhardened `docker run` (no `--cap-drop`, no
   `no-new-privileges`, writable root, no `sysctls`, as another non-root UID and GID) and requires
@@ -736,6 +839,8 @@ on the host with Docker access, which is root-equivalent.
 4. `internal/hardening` and the canary (uses the proxy).
 5. Reference controller image in `images/controller/`.
 6. Controller: `up` (with approval prompt, post-start verification and Remote Control URL), `down`, `status`, `logs`.
+7. Guided `init` (interactive only on a terminal): workspace creation with `git init`, the runtime image pinned in code and pulled on approval, the reference controller image built from the binary on approval.
+8. Claude sign-in on `up`, `warden login`, pre-seeded first-run settings, sign-in state in `status`.
 
 ## Done means
 
