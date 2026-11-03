@@ -1,6 +1,4 @@
-// Package images holds the contract test for the Dockerfiles under it.
-// There is no Go code here: the images are built by the user (see
-// docs/phase-1.md, "Reference controller image").
+// Contract test for the Dockerfiles under images/.
 package images
 
 import (
@@ -10,51 +8,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// instruction is one Dockerfile instruction, continuation lines joined.
-type instruction struct {
-	line int
-	cmd  string // upper case: FROM, RUN, ...
-	args string
-}
-
-// parse splits a Dockerfile into instructions. It handles what the
-// reference image uses: comments, blank lines and backslash continuations.
-// Anything it doesn't understand is an error, so a construct the contract
-// can't see is never silently allowed.
-func parse(src string) ([]instruction, error) {
-	var out []instruction
-	var cur *instruction
-	for i, raw := range strings.Split(src, "\n") {
-		line := strings.TrimSpace(raw)
-		if cur == nil && (line == "" || strings.HasPrefix(line, "#")) {
-			continue
-		}
-		if cur != nil && strings.HasPrefix(line, "#") {
-			continue // a comment inside a continuation
-		}
-		cont := strings.HasSuffix(line, "\\")
-		line = strings.TrimSuffix(line, "\\")
-		if cur == nil {
-			cmd, args, _ := strings.Cut(line, " ")
-			if !regexp.MustCompile(`^[A-Za-z]+$`).MatchString(cmd) {
-				return nil, fmt.Errorf("line %d: not an instruction: %q", i+1, raw)
-			}
-			cur = &instruction{line: i + 1, cmd: strings.ToUpper(cmd), args: strings.TrimSpace(args)}
-		} else {
-			cur.args += " " + strings.TrimSpace(line)
-		}
-		if !cont {
-			cur.args = strings.Join(strings.Fields(cur.args), " ")
-			out = append(out, *cur)
-			cur = nil
-		}
-	}
-	if cur != nil {
-		return nil, fmt.Errorf("line %d: continuation at end of file", cur.line)
-	}
-	return out, nil
-}
 
 var (
 	digestFrom     = regexp.MustCompile(`^debian:trixie-slim@sha256:[0-9a-f]{64} AS base$`)
