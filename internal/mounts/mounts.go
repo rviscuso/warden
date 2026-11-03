@@ -109,17 +109,33 @@ func ValidateWorkspace(path string, p Policy) (string, error) {
 		return "", &Error{Rule: RuleNotDir, Workspace: w, Msg: "is not a directory"}
 	}
 
+	if err := checkRules(w, p); err != nil {
+		return "", err
+	}
+
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", &Error{Rule: RuleInvalid, Workspace: w, Msg: "cannot determine the owner"}
+	}
+	if int(st.Uid) != p.UID {
+		return "", &Error{Rule: RuleNotOwner, Workspace: w, Msg: fmt.Sprintf("is owned by uid %d, not the invoking user (uid %d)", st.Uid, p.UID)}
+	}
+	return w, nil
+}
+
+// checkRules applies every forbidden-path rule to the resolved path w.
+func checkRules(w string, p Policy) *Error {
 	if w == "/" {
-		return "", &Error{Rule: RuleRoot, Workspace: w, Msg: "is the root directory"}
+		return &Error{Rule: RuleRoot, Workspace: w, Msg: "is the root directory"}
 	}
 
 	homes, err := forms(p.Home)
 	if err != nil {
-		return "", &Error{Rule: RuleInvalid, Workspace: w, Forbidden: p.Home, Msg: err.Error()}
+		return &Error{Rule: RuleInvalid, Workspace: w, Forbidden: p.Home, Msg: err.Error()}
 	}
 	for _, h := range homes {
 		if w == h || within(h, w) {
-			return "", &Error{Rule: RuleHome, Workspace: w, Forbidden: h, Msg: "is the home directory or an ancestor of it (" + h + ")"}
+			return &Error{Rule: RuleHome, Workspace: w, Forbidden: h, Msg: "is the home directory or an ancestor of it (" + h + ")"}
 		}
 	}
 
@@ -146,24 +162,16 @@ func ValidateWorkspace(path string, p Policy) (string, error) {
 		for _, f := range g.paths {
 			variants, err := forms(f)
 			if err != nil {
-				return "", &Error{Rule: RuleInvalid, Workspace: w, Forbidden: f, Msg: err.Error()}
+				return &Error{Rule: RuleInvalid, Workspace: w, Forbidden: f, Msg: err.Error()}
 			}
 			for _, ff := range variants {
 				if rel := relation(w, ff); rel != "" {
-					return "", &Error{Rule: g.rule, Workspace: w, Forbidden: ff, Msg: fmt.Sprintf("%s the %s %s", rel, g.what, ff)}
+					return &Error{Rule: g.rule, Workspace: w, Forbidden: ff, Msg: fmt.Sprintf("%s the %s %s", rel, g.what, ff)}
 				}
 			}
 		}
 	}
-
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return "", &Error{Rule: RuleInvalid, Workspace: w, Msg: "cannot determine the owner"}
-	}
-	if int(st.Uid) != p.UID {
-		return "", &Error{Rule: RuleNotOwner, Workspace: w, Msg: fmt.Sprintf("is owned by uid %d, not the invoking user (uid %d)", st.Uid, p.UID)}
-	}
-	return w, nil
+	return nil
 }
 
 func (p Policy) check() error {
@@ -342,4 +350,56 @@ func Overlap(a, b string) (rel, formA, formB string, err error) {
 		}
 	}
 	return "", "", "", nil
+}
+
+// ValidateNewWorkspace checks a workspace that doesn't exist yet, before
+// Warden creates it (the guided init). path must be absolute and must not
+// exist; its parent must exist, be a directory and be owned by p.UID. The
+// would-be path, the resolved parent plus the last component, must pass
+// every forbidden-path rule. It returns that would-be path: the only path
+// a caller may create. After creating it, the caller must run
+// ValidateWorkspace on it, which also checks what was created.
+func ValidateNewWorkspace(path string, p Policy) (string, error) {
+	if err := p.check(); err != nil {
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: err.Error()}
+	}
+	if !filepath.IsAbs(path) {
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: "is not an absolute path"}
+	}
+	clean := filepath.Clean(path)
+	base := filepath.Base(clean)
+	if clean == "/" || base == "." || base == ".." || strings.Contains(path, "/../") || strings.HasSuffix(path, "/..") {
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: "must name a new folder, without .. segments"}
+	}
+	if _, err := os.Lstat(clean); err == nil {
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: "already exists"}
+	} else if !isNotExist(err) {
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: "cannot inspect: " + err.Error()}
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(clean))
+	if err != nil {
+		if isNotExist(err) {
+			return "", &Error{Rule: RuleMissing, Workspace: path, Msg: "its parent folder " + filepath.Dir(clean) + " does not exist"}
+		}
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: "cannot resolve the parent folder: " + err.Error()}
+	}
+	fi, err := os.Stat(parent)
+	if err != nil {
+		return "", &Error{Rule: RuleInvalid, Workspace: path, Msg: "cannot inspect the parent folder: " + err.Error()}
+	}
+	if !fi.IsDir() {
+		return "", &Error{Rule: RuleNotDir, Workspace: path, Msg: "its parent " + parent + " is not a directory"}
+	}
+	w := filepath.Join(parent, base)
+	if err := checkRules(w, p); err != nil {
+		return "", err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", &Error{Rule: RuleInvalid, Workspace: w, Msg: "cannot determine the parent folder's owner"}
+	}
+	if int(st.Uid) != p.UID {
+		return "", &Error{Rule: RuleNotOwner, Workspace: w, Msg: fmt.Sprintf("its parent %s is owned by uid %d, not the invoking user (uid %d)", parent, st.Uid, p.UID)}
+	}
+	return w, nil
 }
