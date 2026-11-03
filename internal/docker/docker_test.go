@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +63,11 @@ func TestHelperProcess(t *testing.T) {
 		}
 		n, _ := strconv.Atoi(args[1])
 		w.Write(make([]byte, n))
+	case "progress": // two lines, a pause between, on both streams
+		fmt.Fprintln(os.Stdout, "step 1")
+		time.Sleep(300 * time.Millisecond)
+		fmt.Fprintln(os.Stderr, "step 2")
+		os.Exit(3)
 	case "sleep":
 		d, _ := time.ParseDuration(args[0])
 		time.Sleep(d)
@@ -483,4 +490,54 @@ func TestDockerConfigEmptyAfterFix(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.runner(t)
+}
+
+// syncBuffer records writes with their arrival time.
+type syncBuffer struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	times []time.Time
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.times = append(b.times, time.Now())
+	return b.buf.Write(p)
+}
+
+// Stream delivers output as it arrives, both streams to one writer, with
+// the exit code and the sanitized environment.
+func TestStream(t *testing.T) {
+	r := newSetup(t).runner(t)
+	var w syncBuffer
+	start := time.Now()
+	code, err := r.Stream(context.Background(), helperArgs("progress"), &w)
+	if err != nil || code != 3 {
+		t.Fatalf("code %d err %v", code, err)
+	}
+	if w.buf.String() != "step 1\nstep 2\n" {
+		t.Fatalf("output %q", w.buf.String())
+	}
+	if len(w.times) < 2 || w.times[0].Sub(start) >= 300*time.Millisecond {
+		t.Fatalf("output not streamed: first write after %v", w.times[0].Sub(start))
+	}
+
+	var env syncBuffer
+	if code, err := r.Stream(context.Background(), helperArgs("env"), &env); err != nil || code != 0 {
+		t.Fatalf("env: %d %v", code, err)
+	}
+	if strings.Contains(env.buf.String(), "GOTMPDIR") || !strings.Contains(env.buf.String(), "DOCKER_CONFIG=") {
+		t.Fatalf("environment not sanitized:\n%s", env.buf.String())
+	}
+}
+
+func TestStreamTimeout(t *testing.T) {
+	r := newSetup(t).runner(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var w syncBuffer
+	if _, err := r.Stream(ctx, helperArgs("sleep", "10s"), &w); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
 }

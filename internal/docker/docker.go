@@ -48,6 +48,14 @@ type Runner interface {
 	Run(ctx context.Context, args []string, stdin io.Reader) (stdout, stderr []byte, exitCode int, err error)
 }
 
+// Streamer runs one docker CLI invocation with stdout and stderr copied to
+// w as they arrive, for long commands whose progress the user watches (a
+// build). w gets both streams; it must not need them apart. The error rules
+// are Runner's.
+type Streamer interface {
+	Stream(ctx context.Context, args []string, w io.Writer) (exitCode int, err error)
+}
+
 // FindBinary returns the first candidate that is an executable regular
 // file. Candidates must be absolute.
 func FindBinary(candidates []string) (string, error) {
@@ -84,6 +92,7 @@ type Exec struct {
 }
 
 var _ Runner = (*Exec)(nil)
+var _ Streamer = (*Exec)(nil)
 
 // New validates opts and prepares <state>/docker-config: created with mode
 // 0700 if missing; if it exists, it must already be a 0700 directory owned
@@ -262,4 +271,36 @@ func (b *cappedBuffer) Bytes() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Bytes()
+}
+
+// Stream runs docker with args as argv, copying its output to w as it
+// arrives. If ctx has no deadline, the runner's timeout applies. Nothing
+// is buffered, so there is no output cap.
+func (e *Exec) Stream(ctx context.Context, args []string, w io.Writer) (int, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, e.timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, e.binary, args...)
+	cmd.Env = slices.Clone(e.env)
+	cmd.Dir = "/"
+	cmd.Stdout = w
+	cmd.Stderr = w // the same writer: os/exec serializes the two streams
+	cmd.WaitDelay = 5 * time.Second
+	err := cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return -1, fmt.Errorf("docker %s: %w", describe(args), ctxErr)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if exitErr.Exited() {
+			return exitErr.ExitCode(), nil
+		}
+		return -1, fmt.Errorf("docker %s: %v", describe(args), exitErr)
+	}
+	if err != nil {
+		return -1, fmt.Errorf("docker %s: %w", describe(args), err)
+	}
+	return 0, nil
 }
