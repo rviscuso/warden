@@ -109,7 +109,7 @@ user ──▶ warden (CLI, runs as the user) ──argv only──▶ docker CL
 - **Driving Docker.** Warden generates compose files as JSON (valid YAML, no YAML dependency) and runs `docker compose`, passing arguments as argv (never `sh -c`). The approval prompt shows the generated file.
 - **Docker environment hygiene.** Warden ignores `DOCKER_HOST` and `DOCKER_CONTEXT`. It passes the socket recorded at `init` explicitly and uses its own empty `DOCKER_CONFIG`, so no credential helper or CLI plugin from the user's Docker config runs.
 - **Daemon pinning.** `init` records the daemon's socket and ID. Every later command checks the ID and refuses on a mismatch.
-- **Images.** Warden's own containers (canary, proxy) run from one small stock image pinned by a digest in Warden's code, with the static `warden` binary mounted read-only. Warden pulls only that image, only by that digest, and builds only its reference controller image (section 6); each after showing the exact command and getting a `y`. Without a terminal it never pulls or builds; it prints the commands instead.
+- **Images.** Warden's own containers (canary, proxy) run from one small stock image pinned by a digest in Warden's code (config has no field for it), with the static `warden` binary mounted read-only. Warden pulls only that image, only by that digest, and builds only its reference controller image (section 6); each after showing the exact command and getting a `y`. Without a terminal it never pulls or builds; it prints what to run instead (the `docker pull` command, and `warden init` in a terminal for the build).
 
 ## 4. Docker modes
 
@@ -178,7 +178,11 @@ and their tests are in `docs/phase-1.md`.
 
 Warden ships a reference controller image definition, compiled into its binary. `init` builds
 it on approval, from a fresh build context that contains only that Dockerfile, and pins the
-resulting image ID in config. Any controller image must:
+resulting image ID in config. It also records that ID, with the SHA-256 of the Dockerfile it was
+built from, in Warden's state (never mounted), so a later `init` can reuse the build instead of
+rebuilding, but only if the image is still local, passes the contract checks, and the Dockerfile
+in the binary is unchanged. A Docker label can't serve for this: anyone with Docker access can set
+one. Any controller image must:
 - run correctly as an arbitrary non-root UID and GID, with no capabilities;
 - install its tools outside `$HOME`, with self-updating turned off (rebuild the image to update);
 - use `/home/agent` as `$HOME`, which Warden bind-mounts from the user's agent-home directory;
