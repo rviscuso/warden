@@ -463,3 +463,27 @@ func TestGuidedNeverOverwrites(t *testing.T) {
 		t.Fatalf("config replaced: %q", got)
 	}
 }
+
+// The build output reaches the terminal as it runs, without escape
+// sequences; a failed build asks again.
+func TestGuidedBuildStreamsAndFails(t *testing.T) {
+	h := newHost(t)
+	args := h.scriptBuild("unused")
+	h.fake.On(args, dockertest.Response{ExitCode: 1, Stdout: "#5 [base 2/2] RUN apt-get update\n", Stderr: "\x1b]0;pwned\x07E: Unable to fetch\n"})
+	h.guided(h.ws, "", "", "", "", "", "", "y", ctrlID, "y")
+	r := h.run("init")
+	if r.code != 0 {
+		t.Fatalf("exit %d\n%s", r.code, r.stderr)
+	}
+	for _, want := range []string{"output follows)\n#5 [base 2/2] RUN apt-get update\n]0;pwnedE: Unable to fetch\n", "✗ docker buildx build: exit 1"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, r.stderr)
+		}
+	}
+	if strings.Contains(r.stderr, "\x1b") || strings.Contains(r.stderr, "\x07") {
+		t.Error("an escape sequence reached the terminal")
+	}
+	if h.readConfig().Controller.Image != ctrlID {
+		t.Error("didn't ask again after the failed build")
+	}
+}

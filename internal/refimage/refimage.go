@@ -27,6 +27,7 @@ import (
 	"github.com/rviscuso/warden/images"
 	"github.com/rviscuso/warden/internal/docker"
 	"github.com/rviscuso/warden/internal/paths"
+	"github.com/rviscuso/warden/internal/termsafe"
 )
 
 // Timeouts.
@@ -189,18 +190,20 @@ func (b *Build) Args() []string {
 // Remove deletes the build directory.
 func (b *Build) Remove() error { return os.RemoveAll(b.dir) }
 
-// Run builds and returns the image ID. On failure, the error carries the
-// last tailLines lines of the build output.
-func (b *Build) Run(ctx context.Context, r docker.Runner, tailLines int) (string, error) {
+// Run builds and returns the image ID. The build output streams to w as it
+// arrives, through termsafe: it includes text from the build's RUN steps,
+// which is untrusted (DESIGN.md, section 2).
+func (b *Build) Run(ctx context.Context, r docker.Streamer, w io.Writer) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, BuildTimeout)
 	defer cancel()
-	stdout, stderr, code, err := r.Run(ctx, b.Args(), nil)
-	if err != nil || code != 0 {
-		why := fmt.Sprintf("exit %d", code)
-		if err != nil {
-			why = err.Error()
-		}
-		return "", fmt.Errorf("docker buildx build: %s\n%s", why, tail(string(stdout)+string(stderr), tailLines))
+	safe := &termsafe.Writer{W: w}
+	code, err := r.Stream(ctx, b.Args(), safe)
+	safe.Flush()
+	if err != nil {
+		return "", fmt.Errorf("docker buildx build: %w", err)
+	}
+	if code != 0 {
+		return "", fmt.Errorf("docker buildx build: exit %d", code)
 	}
 	id, err := os.ReadFile(b.iidFile())
 	if err != nil {
@@ -211,14 +214,6 @@ func (b *Build) Run(ctx context.Context, r docker.Runner, tailLines int) (string
 		return "", fmt.Errorf("docker buildx build: image ID %q is not sha256:<64 hex>", s)
 	}
 	return s, nil
-}
-
-func tail(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
 }
 
 // Record is <state>/reference-image.json: the last reference build.

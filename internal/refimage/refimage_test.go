@@ -132,7 +132,8 @@ func TestBuild(t *testing.T) {
 		}
 		os.WriteFile(b.iidFile(), []byte(goodID), 0o600)
 	}})
-	id, err := b.Run(ctx, f, 20)
+	var out strings.Builder
+	id, err := b.Run(ctx, f, &out)
 	if err != nil || id != goodID {
 		t.Fatalf("got %q, %v", id, err)
 	}
@@ -141,34 +142,6 @@ func TestBuild(t *testing.T) {
 	}
 	if _, err := os.Stat(b.dir); !os.IsNotExist(err) {
 		t.Fatal("build dir left")
-	}
-}
-
-func TestBuildFailureTail(t *testing.T) {
-	st := stateDir(t)
-	b, err := Prepare(st, os.Getuid(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer b.Remove()
-	var out strings.Builder
-	for i := range 30 {
-		out.WriteString("line " + string(rune('a'+i%26)) + "\n")
-	}
-	f := dockertest.New(t)
-	f.On(b.Args(), dockertest.Response{ExitCode: 1, Stderr: out.String()})
-	_, err = b.Run(ctx, f, 20)
-	if err == nil || strings.Count(err.Error(), "\n") != 20 || !strings.Contains(err.Error(), "exit 1") {
-		t.Fatalf("got %v", err)
-	}
-	// A build that "succeeds" without an ID file, or with a bad one, fails.
-	f.On(b.Args(), dockertest.Response{})
-	if _, err := b.Run(ctx, f, 20); err == nil {
-		t.Fatal("no iid accepted")
-	}
-	os.WriteFile(b.iidFile(), []byte("latest"), 0o600)
-	if _, err := b.Run(ctx, f, 20); err == nil {
-		t.Fatal("bad iid accepted")
 	}
 }
 
@@ -254,5 +227,34 @@ func TestReusable(t *testing.T) {
 	os.WriteFile(RecordFile(st), []byte(`{"image_id":"`+goodID+`","extra":1}`), 0o600)
 	if _, err := LoadRecord(st); err == nil {
 		t.Fatal("unknown field accepted")
+	}
+}
+
+// The output streams through termsafe; a failed build is an error.
+func TestBuildStreamsSafely(t *testing.T) {
+	st := stateDir(t)
+	b, err := Prepare(st, os.Getuid(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Remove()
+	f := dockertest.New(t)
+	f.On(b.Args(), dockertest.Response{ExitCode: 1, Stdout: "#5 RUN apt-get update\n", Stderr: "\x1b]52;c;cGF5bG9hZA==\x07\x1b[2Jfailed\n"})
+	var out strings.Builder
+	_, err = b.Run(ctx, f, &out)
+	if err == nil || err.Error() != "docker buildx build: exit 1" {
+		t.Fatalf("got %v", err)
+	}
+	if out.String() != "#5 RUN apt-get update\n]52;c;cGF5bG9hZA==[2Jfailed\n" {
+		t.Fatalf("streamed %q", out.String())
+	}
+	// A build that "succeeds" without an ID file, or with a bad one, fails.
+	f.On(b.Args(), dockertest.Response{})
+	if _, err := b.Run(ctx, f, &out); err == nil {
+		t.Fatal("no iid accepted")
+	}
+	os.WriteFile(b.iidFile(), []byte("latest"), 0o600)
+	if _, err := b.Run(ctx, f, &out); err == nil {
+		t.Fatal("bad iid accepted")
 	}
 }

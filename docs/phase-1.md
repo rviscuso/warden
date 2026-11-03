@@ -120,8 +120,10 @@ Order:
      is written to a fresh `<state>/build/<random>/context/` (directories 0700) holding nothing else.
      `docker buildx build --progress=plain --iidfile <state>/build/<random>/iid <context>`, 20 minutes,
      with Warden's empty Docker config, so buildx uses its default builder on the pinned daemon.
-     The build cache is allowed. Output: one `building…` line; on failure, the last 20 lines of
-     the build output. The build directory is always removed.
+     The build cache is allowed. Output: the build output streams to the terminal as it runs (decided in
+     review), through `internal/termsafe`: every control character except newline and tab is removed,
+     including ESC and the UTF-8 C1 controls, since `RUN` steps print untrusted text. A failed build
+     asks for the controller image again. The build directory is always removed.
    - **The contract check** (for a built or an entered image), from `docker image inspect`: `Os`
      `linux` and `Architecture` the host's; `Config.User` set and not root (`0`, `root`, `0:…`,
      `root:…`); no `Entrypoint` and no `Cmd`; `WorkingDir` `/workspace`; `Env` has

@@ -487,8 +487,12 @@ func (g *guide) build() (string, error) {
 	if err != nil || !ok {
 		return "", err
 	}
-	g.say("  building… (a few minutes)")
-	id, err := b.Run(g.ctx, g.r, 20)
+	s, ok := g.r.(docker.Streamer)
+	if !ok {
+		return "", errors.New("the Docker runner cannot stream output")
+	}
+	g.say("  building… (a few minutes; output follows)")
+	id, err := b.Run(g.ctx, s, g.e.stderr)
 	if err != nil {
 		g.refuse("%v", err)
 		return "", nil
