@@ -200,9 +200,12 @@ internal/compose/      typed compose file, Render (the only producer of compose 
 internal/canary/       the in-container probe (warden probe), its output format, the canary project
 internal/wardenbin/    copy and verify the warden binary under <state>/bin/
 internal/netx/         the one way Warden opens a listener: MPTCP off (netx.Listen)
+internal/gitinit/      the one host git run: git init in a folder Warden has just created
+internal/refimage/     build the reference controller image, the image contract check, the build record
+internal/termsafe/     strip control characters from untrusted output before it reaches the terminal
 internal/controller/   compose generation, up/down/status/logs, post-start verification, RC URL
 images/controller/     reference controller image (Dockerfile only)
-images/                contract test for the Dockerfiles under it (images_test.go)
+images/                images.RuntimeImage, the embedded controller Dockerfile, and its contract test
 ```
 
 Everything that touches the outside world sits behind an interface so tests need no Docker,
