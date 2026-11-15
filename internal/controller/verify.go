@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/rviscuso/warden/internal/termsafe"
 )
@@ -88,6 +89,13 @@ func (s ProcStatus) Problems(uid, gid int) []string {
 	return out
 }
 
+// gone reports whether err means the process no longer exists: the status
+// file is missing (it exited before the open), or reading it returned ESRCH
+// (it exited between the open and the read).
+func gone(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
+}
+
 // children returns the PIDs whose PPid is pid, by reading every
 // <root>/proc/<n>/status: it doesn't rely on CONFIG_PROC_CHILDREN. A
 // process that exits during the scan is skipped; any other read error
@@ -105,8 +113,8 @@ func children(root string, pid int) ([]int, error) {
 			continue
 		}
 		s, err := readProcStatus(root, n)
-		if errors.Is(err, os.ErrNotExist) {
-			continue // exited
+		if gone(err) {
+			continue
 		}
 		if err != nil {
 			return nil, err
@@ -129,8 +137,15 @@ func (e *VerifyError) Error() string {
 }
 
 // verifyProcesses checks a container's init (pid, from docker inspect) and
-// its one child, the container's main process, as seen from the host.
-// It is called again until the child exists or the caller gives up.
+// every child of it, as seen from the host. It is called again until a
+// child exists or the caller gives up.
+//
+// Right after a start init has one child, the container's main process.
+// Later it can have more: a process whose parent exited is re-parented to
+// init, so a background job the agent left behind sits next to the main
+// process. up verifies a container that is already running whenever it is
+// run again, so more than one child is normal and each one is checked; the
+// count itself proves nothing about hardening.
 func verifyProcesses(root, container string, pid, uid, gid int) (done bool, err error) {
 	init, err := readProcStatus(root, pid)
 	if err != nil {
@@ -140,25 +155,29 @@ func verifyProcesses(root, container string, pid, uid, gid int) (done bool, err 
 	if err != nil {
 		return true, &VerifyError{container, []string{"listing processes: " + err.Error()}}
 	}
-	switch {
-	case len(kids) == 0:
-		return false, &VerifyError{container, []string{"init process " + strconv.Itoa(pid) + " has no child (main process) yet"}}
-	case len(kids) > 1:
-		return true, &VerifyError{container, []string{fmt.Sprintf("init process %d has %d children %v, want exactly one main process", pid, len(kids), kids)}}
-	}
-	main, err := readProcStatus(root, kids[0])
-	if err != nil {
-		return true, &VerifyError{container, []string{"main process " + strconv.Itoa(kids[0]) + ": " + err.Error()}}
-	}
 	var problems []string
 	for _, p := range init.Problems(uid, gid) {
 		problems = append(problems, fmt.Sprintf("init (pid %d, %s): %s", pid, init.Name, p))
 	}
-	for _, p := range main.Problems(uid, gid) {
-		problems = append(problems, fmt.Sprintf("main process (pid %d, %s): %s", main.PID, main.Name, p))
+	checked := 0
+	for _, k := range kids {
+		child, err := readProcStatus(root, k)
+		if gone(err) {
+			continue // exited since it was listed
+		}
+		if err != nil {
+			return true, &VerifyError{container, []string{"child process " + strconv.Itoa(k) + ": " + err.Error()}}
+		}
+		checked++
+		for _, p := range child.Problems(uid, gid) {
+			problems = append(problems, fmt.Sprintf("child process (pid %d, %s): %s", child.PID, child.Name, p))
+		}
 	}
-	if len(problems) > 0 {
+	switch {
+	case len(problems) > 0:
 		return true, &VerifyError{container, problems}
+	case checked == 0:
+		return false, &VerifyError{container, []string{"init process " + strconv.Itoa(pid) + " has no child (main process) yet"}}
 	}
 	return true, nil
 }

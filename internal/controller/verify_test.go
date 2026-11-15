@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -57,7 +59,7 @@ func TestVerifyFails(t *testing.T) {
 		edit func(m map[int]string)
 		want string
 	}{
-		"main as root":   {func(m map[int]string) { m[501] = procStatus("claude", 500, 0, 0, zeroCaps, zeroCaps, 1) }, "main process (pid 501, claude): Uid"},
+		"main as root":   {func(m map[int]string) { m[501] = procStatus("claude", 500, 0, 0, zeroCaps, zeroCaps, 1) }, "child process (pid 501, claude): Uid"},
 		"main other uid": {func(m map[int]string) { m[501] = procStatus("claude", 500, 1001, 1000, zeroCaps, zeroCaps, 1) }, "Uid \"1001 1001 1001 1001\""},
 		"main other gid": {func(m map[int]string) { m[501] = procStatus("claude", 500, 1000, 1001, zeroCaps, zeroCaps, 1) }, "Gid"},
 		"main capabilities": {func(m map[int]string) {
@@ -83,7 +85,6 @@ func TestVerifyFails(t *testing.T) {
 			m[500] = procStatus("docker-init", 1, 1000, 1000, "00000000a80425fb", zeroCaps, 1)
 		}, "init (pid 500, docker-init): CapEff"},
 		"init as root":  {func(m map[int]string) { m[500] = procStatus("docker-init", 1, 0, 0, zeroCaps, zeroCaps, 1) }, "init (pid 500"},
-		"two children":  {func(m map[int]string) { m[503] = procStatus("sh", 500, 1000, 1000, zeroCaps, zeroCaps, 1) }, "has 2 children"},
 		"no init":       {func(m map[int]string) { delete(m, 500) }, "init process 500"},
 		"missing field": {func(m map[int]string) { m[501] = "Name:\tclaude\nPPid:\t500\nUid:\t1000\t1000\t1000\t1000\n" }, "no "},
 		"uid partly changed": {func(m map[int]string) {
@@ -126,5 +127,51 @@ func TestProcessNameIsSafe(t *testing.T) {
 	_, err := verifyProcesses(root, ControllerName, 500, 1000, 1000)
 	if err == nil || !strings.Contains(err.Error(), "a]0;tb") || strings.ContainsAny(err.Error(), "\x1b\x07") {
 		t.Fatalf("got %q", err)
+	}
+}
+
+// TestVerifyEveryChild: a process whose parent exited is re-parented to
+// init, so a container that has been running for a while can have several
+// children of init. That alone is not a failure (it used to be, and up on
+// a running sandbox then stopped it as a security incident); each child is
+// verified, and one that isn't hardened fails.
+func TestVerifyEveryChild(t *testing.T) {
+	root := t.TempDir()
+	m := hardenedTree(1000, 1000)
+	m[503] = procStatus("sleep", 500, 1000, 1000, zeroCaps, zeroCaps, 1) // an orphan, re-parented
+	fakeProc(t, root, m)
+	if done, err := verifyProcesses(root, ControllerName, 500, 1000, 1000); !done || err != nil {
+		t.Fatalf("hardened orphan: done %v err %v", done, err)
+	}
+
+	root = t.TempDir()
+	m[503] = procStatus("sleep", 500, 0, 0, "00000000a80425fb", zeroCaps, 0)
+	fakeProc(t, root, m)
+	done, err := verifyProcesses(root, ControllerName, 500, 1000, 1000)
+	if !done || err == nil {
+		t.Fatalf("unhardened orphan: done %v err %v", done, err)
+	}
+	for _, want := range []string{"child process (pid 503, sleep): Uid", "CapEff 00000000a80425fb", "NoNewPrivs 0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("unhardened orphan: %q lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "pid 501") {
+		t.Errorf("the hardened main process is reported: %q", err)
+	}
+}
+
+// TestGone: a process that exits while /proc is scanned gives ENOENT at
+// the open or ESRCH at the read, depending on when. Both mean "exited".
+func TestGone(t *testing.T) {
+	for _, err := range []error{os.ErrNotExist, fmt.Errorf("/proc/7/status: %w", syscall.ESRCH), &os.PathError{Op: "open", Err: syscall.ENOENT}} {
+		if !gone(err) {
+			t.Errorf("%v: not gone", err)
+		}
+	}
+	for _, err := range []error{nil, syscall.EACCES, syscall.EPERM, errors.New("no Uid field")} {
+		if gone(err) {
+			t.Errorf("%v: gone", err)
+		}
 	}
 }
