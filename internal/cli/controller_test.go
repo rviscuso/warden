@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/rviscuso/warden/images"
 	"os"
@@ -576,5 +577,66 @@ func TestCheckWritesNothing(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(h.stateFile()); string(after) != string(before) {
 		t.Fatalf("check changed state.json:\n%s\n%s", before, after)
+	}
+}
+
+// TestUpStopsWhatItStartedOnFailure: once up -d has been invoked, a failure
+// before verification stops the project's containers, so nothing keeps
+// running unverified. up -d can fail part-way (the proxy started, the
+// controller didn't), and the steps after it can fail too.
+func TestUpStopsWhatItStartedOnFailure(t *testing.T) {
+	idArgs := []string{"inspect", "--type", "container", "--format", "{{.Id}}", "warden-proxy", "warden-controller"}
+	cases := map[string]struct {
+		script func(h *host)
+		want   string
+	}{
+		"up -d fails": {func(h *host) {
+			h.fake.On([]string{"compose", "-p", "warden", "-f", h.composeFile(), "up", "-d"},
+				dockertest.Response{ExitCode: 1, Stderr: "Error response from daemon: no such image"})
+		}, "no such image"},
+		"up -d does not finish": {func(h *host) {
+			h.fake.On([]string{"compose", "-p", "warden", "-f", h.composeFile(), "up", "-d"},
+				dockertest.Response{ExitCode: -1, Err: errors.New("docker compose: context deadline exceeded")})
+		}, "context deadline exceeded"},
+		"container IDs unreadable": {func(h *host) {
+			h.fake.On(idArgs, dockertest.Response{ExitCode: 1, Stderr: "Error: No such container: warden-controller"})
+		}, "No such container"},
+		"container IDs malformed": {func(h *host) {
+			h.fake.On(idArgs, dockertest.Response{Stdout: "abc\n"})
+		}, "unexpected container IDs"},
+	}
+	for name, c := range cases {
+		h := upHost(t)
+		c.script(h)
+		r := h.run("up")
+		stop := []string{"compose", "-p", "warden", "-f", h.composeFile(), "stop", "-t", "0"}
+		switch {
+		case r.code != ExitFail:
+			t.Errorf("%s: exit %d", name, r.code)
+		case !h.called(stop...):
+			t.Errorf("%s: nothing was stopped\n%s", name, r.stderr)
+		case !strings.Contains(r.stderr, c.want) || !strings.Contains(r.stderr, "what it started was stopped") ||
+			!strings.Contains(r.stderr, "fix: run warden down to remove the stopped containers, then warden up again"):
+			t.Errorf("%s: stderr\n%s", name, r.stderr)
+		case strings.Contains(r.stdout, "Verified"):
+			t.Errorf("%s: claims verification\n%s", name, r.stdout)
+		}
+		// Not an incident: nothing was found wrong with a container.
+		if c := h.loadState().Controller; c != nil && c.Incident != "" {
+			t.Errorf("%s: an incident was recorded", name)
+		}
+	}
+}
+
+// TestUpFailureStopFails: if the stop fails too, the user is told to stop
+// the containers themselves.
+func TestUpFailureStopFails(t *testing.T) {
+	h := upHost(t)
+	h.fake.On([]string{"compose", "-p", "warden", "-f", h.composeFile(), "up", "-d"}, dockertest.Response{ExitCode: 1, Stderr: "boom"})
+	h.fake.On([]string{"compose", "-p", "warden", "-f", h.composeFile(), "stop", "-t", "0"}, dockertest.Response{ExitCode: 1, Stderr: "daemon busy"})
+	r := h.run("up")
+	if r.code != ExitFail || !strings.Contains(r.stderr, "boom") || !strings.Contains(r.stderr, "daemon busy") ||
+		!strings.Contains(r.stderr, "fix: stop them yourself: docker compose -p warden stop -t 0; then run warden down") {
+		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 }

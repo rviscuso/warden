@@ -302,12 +302,15 @@ func Up(env Env) error {
 	}
 	ctx, cancel := context.WithTimeout(env.Ctx, ComposeTimeout)
 	defer cancel()
+	// From here until verification has run, a failure must not leave what
+	// up -d started running: abort stops it (fail closed). up -d itself can
+	// fail part-way, with the proxy up and the controller not.
 	if _, err := s.docker(ctx, "compose", "-p", ProjectName, "-f", file, "up", "-d"); err != nil {
-		return err
+		return s.abort(file, err)
 	}
 	ids, err := s.containerIDs()
 	if err != nil {
-		return err
+		return s.abort(file, err)
 	}
 	c := &state.Controller{AppliedCompose: string(b), AppliedAt: env.Now().UTC(), ProxyID: ids[0], ControllerID: ids[1]}
 	if old := s.st.Controller; old != nil && old.ControllerID == ids[1] && old.RemoteControlURL != "" {
@@ -315,7 +318,7 @@ func Up(env Env) error {
 	}
 	s.st.Controller = c
 	if err := s.save(); err != nil {
-		return err
+		return s.abort(file, err)
 	}
 
 	for _, name := range []string{ProxyName, ControllerName} {
@@ -348,6 +351,27 @@ func Up(env Env) error {
 	}
 	fmt.Fprintf(env.Stdout, "Remote Control: %s\n", url)
 	return nil
+}
+
+// abort handles a failure after up -d was invoked and before verification
+// ran: it stops the project's containers at once, so nothing Warden
+// started keeps running unverified, and says what to do next. It is not an
+// incident (nothing was found wrong with a container), so no evidence file
+// is written and state records nothing; the stopped containers stay until
+// warden down, like after an incident.
+//
+// The stop gets its own time budget: the caller's may be spent (up -d can
+// fail by timing out) or canceled.
+func (s *session) abort(file string, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.env.Ctx), ComposeTimeout)
+	defer cancel()
+	fmt.Fprintf(s.env.Stderr, "%v\nStopping what was started: it has not been verified.\n", cause)
+	if _, err := s.docker(ctx, "compose", "-p", ProjectName, "-f", file, "stop", "-t", "0"); err != nil {
+		return fail("stop them yourself: docker compose -p warden stop -t 0; then run warden down",
+			"up failed before verification (%v), and stopping what it started failed too: %v", cause, err)
+	}
+	return fail("run warden down to remove the stopped containers, then warden up again",
+		"up failed before verification: %v; what it started was stopped", cause)
 }
 
 // agentHome creates <share>/agents/controller (and agents/), 0700, or

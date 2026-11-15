@@ -727,6 +727,12 @@ Precisely (decided in the M6 review):
   `compose/` 0700) and passed to `docker compose -p warden -f <file> up -d` (5 minutes). The
   file, the time and both container IDs (`docker inspect --format '{{.Id}}'`) go into state right
   after `up -d` succeeds, before verification, so a later `check` or `down` knows them.
+- **A failure before verification stops what was started** (fail closed). `up -d` can fail part-way
+  (the proxy up, the controller not), and reading the container IDs or saving state can fail after
+  it. In each case `up` runs `docker compose -p warden -f <file> stop -t 0`, with its own 5 minutes
+  (the first budget may be spent), and exits 1 with the fix: `warden down`, then `warden up`. It is
+  not an incident: no evidence file, nothing recorded. If the stop fails too, the fix is the stop
+  command itself.
 - **Post-start verification**, for `warden-proxy` and `warden-controller`:
   - `docker inspect --format '{{.State.Running}} {{.State.Pid}}'` must be `true` and a PID > 0;
   - that PID is `docker-init`; its children are found by reading `/proc/*/status` for `PPid`
