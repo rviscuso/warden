@@ -714,6 +714,11 @@ Precisely (decided in the M6 review):
   verified; the agent home created (`agents/` and `agents/controller/`, 0700) or, if it exists,
   required to be a private directory of the user. `down`, `status` and `logs` check the pin too: a
   different daemon's containers mean nothing to Warden.
+- **`down`, `status` and `logs` don't need the config.** They work from state: the pinned socket
+  and the recorded containers. If `config.json` is missing or doesn't load, they print one note on
+  stderr and go on, so a typo made while the sandbox is up never leaves the user without a way to
+  stop it. `up` still refuses. A config that does load is still held to the pin: if its
+  `docker.socket` is not the pinned one, all four refuse as before.
 - **MPTCP status is three-state.** `hardening.MPTCP` is `MPTCPUnknown` (the zero value),
   `MPTCPPresent` or `MPTCPAbsent`; `hardening.HostMPTCP` returns one of the last two or an error.
   `hardening.Settings`, `compose.Validate` and the canary's evaluation refuse `MPTCPUnknown`, so a
