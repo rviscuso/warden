@@ -40,6 +40,35 @@ func TestFindURLNone(t *testing.T) {
 	}
 }
 
+// TestFindURLRefusesControlCharacters: the log is agent-influenced output
+// and the URL is printed on the user's terminal. Each of these used to be
+// returned with the control characters in it; the first is a complete
+// OSC 52 (clipboard write) that survived StripTerminal's single pass.
+func TestFindURLRefusesControlCharacters(t *testing.T) {
+	for name, log := range map[string]string{
+		"nested escape":  "https://claude.ai/code/abc\x1b\x1b\\]52;c;ZXZpbA==\x07 tail",
+		"reset and bell": "https://claude.ai/code/abc\x1bc\x07\x08\x08 tail",
+		"c1 csi":         "https://claude.ai/code/abc\u009b31m tail",
+		"bidi override":  "https://claude.ai/code/abc‮gnp tail",
+		"too long":       "https://claude.ai/code/" + strings.Repeat("a", 201) + " tail",
+		// Refused, and the next URL is not taken in its place.
+		"no fallback": "https://claude.ai/code/abc\x07\nhttps://claude.ai/code/second\n",
+	} {
+		if got, ok := FindURL([]byte(log)); ok {
+			t.Errorf("%s: found %q", name, got)
+		}
+	}
+	// What a real URL may contain is still accepted.
+	for _, want := range []string{
+		"https://claude.ai/code/session_01ABC?x=y&z=1",
+		"https://claude.ai/code/" + strings.Repeat("a", 200),
+	} {
+		if got, ok := FindURL([]byte("Remote Control: " + want + "\n")); !ok || got != want {
+			t.Errorf("%q: got %q %v", want, got, ok)
+		}
+	}
+}
+
 func TestLastLines(t *testing.T) {
 	log := "a\n\n\x1b[31mb\x1b[0m\nc\r\nd\n"
 	if got := strings.Join(lastLines([]byte(log), 3), "|"); got != "b|c|d" {

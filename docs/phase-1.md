@@ -748,7 +748,12 @@ Precisely (decided in the M6 review):
   including OSC 8 hyperlinks, whose target is kept) are removed before matching
   `https://claude\.ai/code/\S+`. The **first** match wins: Claude Code prints the URL at startup,
   before the agent does anything, and a later URL may be one the agent printed (the log is
-  agent-influenced output). If `up -d` kept the recorded controller container (same ID) and a URL is
+  agent-influenced output). That first match must then be, in full,
+  `https://claude.ai/code/` followed by 1 to 200 of `A-Z a-z 0-9 . _ ~ % / ? = & -` (the pattern
+  `state.RemoteControlURL`, which also guards what state stores): the URL is printed on the user's
+  terminal, so a control character or the rest of an escape sequence glued to it is refused
+  (`DESIGN.md` §2). A refused first match counts as no URL; a later one is never taken in its
+  place. If `up -d` kept the recorded controller container (same ID) and a URL is
   recorded, that URL is kept and the log isn't read. If the controller stops running, the wait ends
   at once. Found: saved in state and printed.
 - **No URL:** exit 1, the containers keep running, and the message says what to do: first run? log

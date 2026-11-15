@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/rviscuso/warden/internal/state"
 )
 
 // The Remote Control URL has no documented stdout API yet, so everything
@@ -12,7 +14,9 @@ import (
 // the one place to change.
 
 var (
-	urlPattern = regexp.MustCompile(`https://claude\.ai/code/\S+`)
+	// urlCandidate finds where a URL starts and how far it runs. Whether it
+	// is accepted is state.RemoteControlURL's decision, not this pattern's.
+	urlCandidate = regexp.MustCompile(`https://claude\.ai/code/\S+`)
 
 	// OSC sequences: ESC ] ... terminated by BEL or ESC \. For OSC 8
 	// hyperlinks (ESC ] 8 ; params ; URI ST) the URI is kept, separated by
@@ -60,9 +64,18 @@ func StripTerminal(s string) string {
 // first, because Claude Code prints it at startup, before the agent does
 // anything; a URL printed later may come from the agent (prompt injection
 // can make it print anything) and must never replace the real one.
+//
+// The first candidate must match state.RemoteControlURL in full: only URL
+// characters, bounded length. One that doesn't (a control character or the
+// rest of an escape sequence glued to it) is refused, and no later URL is
+// taken in its place: that would let a crafted first URL hand the choice
+// to whatever is printed next.
 func FindURL(log []byte) (string, bool) {
-	url := urlPattern.FindString(StripTerminal(string(log)))
-	return url, url != ""
+	url := urlCandidate.FindString(StripTerminal(string(log)))
+	if !state.RemoteControlURL.MatchString(url) {
+		return "", false
+	}
+	return url, true
 }
 
 // lastLines returns up to n of the last non-empty lines of a log, with
