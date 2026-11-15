@@ -74,6 +74,10 @@ func TestLastLines(t *testing.T) {
 	if got := strings.Join(lastLines([]byte(log), 3), "|"); got != "b|c|d" {
 		t.Fatalf("got %q", got)
 	}
+	// What StripTerminal's one pass leaves has no control characters.
+	if got := strings.Join(lastLines([]byte("x\x1b\x1b\\]52;c;eA==\x07y\x08\n"), 3), "|"); got != "x]52;c;eA==y" {
+		t.Fatalf("got %q", got)
+	}
 }
 
 // TestStripTerminalKeepsSpaces: TUIs draw spaces as cursor movement. The

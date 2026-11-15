@@ -768,8 +768,15 @@ Precisely (decided in the M6 review):
 - **`down`:** pin check, then `docker compose -p warden down` (5 minutes; never `-v`, never `-f`).
   The container IDs and any incident are cleared from state; the last applied file and URL are kept
   (the next `up` diffs against it; `status` shows the URL as the last one).
-- **`logs proxy|controller [-n N]`:** pin check, then `docker logs --tail N <container>`, stdout and
-  stderr passed through. A non-zero docker exit is exit 1.
+- **`logs proxy|controller [-n N]`:** pin check, then `docker logs --tail N <container>`, stdout to
+  stdout and stderr to stderr. A non-zero docker exit is exit 1.
+- **Container output is never printed raw** (`DESIGN.md` §2: the agent controls what its container
+  prints). `logs`, the log lines shown when no URL is found, and the process names in a failed
+  verification all go through `internal/termsafe`: every control character except newline and tab
+  is removed. The controller's log is a TTY log, so its escape sequences are removed whole first
+  (`controller.StripTerminal`, CR LF as one newline) and it reads as text rather than as `[31m`
+  leftovers; `termsafe` then removes whatever that one pass left. There is no raw mode:
+  `docker logs warden-controller` is the raw log, for a user who wants it.
 - **`host.shared-mounts` and Warden's own containers.** A container whose full ID is recorded in
   state is skipped only if every one of its mounts is one Warden gave it: for the controller, the
   resolved workspace at `/workspace` and the agent home at `/home/agent`; for the proxy, a

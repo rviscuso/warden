@@ -23,6 +23,7 @@ import (
 	"github.com/rviscuso/warden/internal/mounts"
 	"github.com/rviscuso/warden/internal/paths"
 	"github.com/rviscuso/warden/internal/state"
+	"github.com/rviscuso/warden/internal/termsafe"
 	"github.com/rviscuso/warden/internal/wardenbin"
 )
 
@@ -633,8 +634,16 @@ func Logs(env Env, which string, n int) error {
 	if err != nil {
 		return err
 	}
-	env.Stdout.Write(out)
-	env.Stderr.Write(errOut)
+	// A container's log is untrusted output on its way to the user's
+	// terminal (DESIGN.md, section 2). The controller's is a TTY log: its
+	// escape sequences are removed whole first, so what termsafe then drops
+	// is only what was left over, not the ESC of every colour code.
+	text := string(out)
+	if name == ControllerName {
+		text = StripTerminal(strings.ReplaceAll(text, "\r\n", "\n")) // a TTY ends lines with CR LF
+	}
+	io.WriteString(env.Stdout, termsafe.String(text))
+	io.WriteString(env.Stderr, termsafe.String(string(errOut)))
 	if code != 0 {
 		return fail("", "docker logs %s exited %d", name, code)
 	}

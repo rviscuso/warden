@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/rviscuso/warden/internal/termsafe"
 )
 
 const zeroCaps = "0000000000000000"
@@ -55,6 +57,8 @@ func readProcStatus(root string, pid int) (ProcStatus, error) {
 		}
 		*dst = v
 	}
+	// A process sets its own name, and a failed verification prints it.
+	s.Name = termsafe.String(s.Name)
 	return s, nil
 }
 

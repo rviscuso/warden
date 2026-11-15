@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rviscuso/warden/internal/state"
+	"github.com/rviscuso/warden/internal/termsafe"
 )
 
 // The Remote Control URL has no documented stdout API yet, so everything
@@ -78,11 +79,13 @@ func FindURL(log []byte) (string, bool) {
 	return url, true
 }
 
-// lastLines returns up to n of the last non-empty lines of a log, with
-// terminal escapes removed, for the "URL not found" message.
+// lastLines returns up to n of the last non-empty lines of a log, for the
+// "URL not found" message: terminal escapes removed, then every control
+// character StripTerminal left (it is one pass, and a crafted sequence can
+// survive it), since the lines are printed on the user's terminal.
 func lastLines(log []byte, n int) []string {
 	var out []string
-	for _, l := range strings.Split(StripTerminal(string(log)), "\n") {
+	for _, l := range strings.Split(termsafe.String(StripTerminal(string(log))), "\n") {
 		if strings.TrimSpace(l) != "" {
 			out = append(out, l)
 		}
