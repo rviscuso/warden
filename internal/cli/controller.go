@@ -21,7 +21,7 @@ func (e *env) controllerEnv() (controller.Env, error) {
 		UID: e.getuid(), GID: e.getgid(), GOARCH: e.goarch, Root: e.root,
 		DockerPaths: e.dockerPaths, NewRunner: e.newRunner, SystemDirs: e.systemDirs,
 		Executable: e.executable, Stdin: e.stdin, Stdout: e.stdout, Stderr: e.stderr,
-		Now: e.now, Sleep: e.sleep,
+		Now: e.now, Sleep: e.sleep, Interruptible: e.interruptible,
 	}, nil
 }
 
@@ -53,7 +53,13 @@ func defineUp(*flag.FlagSet) func(*env, []string) int {
 			fmt.Fprintf(e.stderr, "warden up: %v\n", err)
 			return ExitFail
 		}
-		if rep := checks.Run(e.checksEnv(checks.ModeCheck, dirs, home)); !rep.OK() {
+		rep, interrupted := e.runChecks(checks.ModeCheck, dirs, home)
+		if interrupted {
+			printReport(e.stdout, rep, false)
+			fmt.Fprintln(e.stderr, "warden up: nothing was shown or applied")
+			return interruptedMsg(e, "up")
+		}
+		if !rep.OK() {
 			printReport(e.stdout, rep, false)
 			fmt.Fprintln(e.stderr, "warden up: a check failed; nothing was shown or applied")
 			return ExitFail

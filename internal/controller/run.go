@@ -56,6 +56,10 @@ type Env struct {
 	Stdout, Stderr io.Writer
 	Now            func() time.Time
 	Sleep          func(time.Duration)
+	// Interruptible returns a context that SIGINT or SIGTERM cancels. up uses
+	// it from the apply on, in place of Ctx, so an interrupt stops what was
+	// started instead of leaving it running unverified. nil: Ctx throughout.
+	Interruptible func() (context.Context, context.CancelFunc)
 }
 
 // Error is a failure with the exact fix for the user, if there is one.
@@ -294,6 +298,16 @@ func Up(env Env) error {
 		return fail("", "nothing applied")
 	}
 
+	// From here on up makes things in Docker, so an interrupt is handled
+	// rather than left to kill warden: before verification it stops what was
+	// started (abort). Not earlier: a read from the terminal can't be
+	// canceled, and at the prompt there is nothing to stop.
+	if env.Interruptible != nil {
+		ictx, stop := env.Interruptible()
+		defer stop()
+		env.Ctx, s.env.Ctx = ictx, ictx
+	}
+
 	if err := ensurePrivateDir(env.Dirs.ComposeDir(), env.UID); err != nil {
 		return err
 	}
@@ -323,6 +337,11 @@ func Up(env Env) error {
 
 	for _, name := range []string{ProxyName, ControllerName} {
 		if verr := s.verify(name); verr != nil {
+			if env.Ctx.Err() != nil {
+				// The docker calls failed because of the interrupt: nothing was
+				// found wrong, so this is no incident. Still unverified: stop.
+				return s.abort(file, errors.New("interrupted during verification"))
+			}
 			return s.incident(ctx, file, verr)
 		}
 	}
@@ -334,6 +353,10 @@ func Up(env Env) error {
 	}
 	url, log, err := s.waitURL()
 	if err != nil {
+		if env.Ctx.Err() != nil {
+			return fail("run warden status to look for the URL again, or warden down to stop",
+				"interrupted while waiting for the Remote Control URL; the containers are verified and still running")
+		}
 		return err
 	}
 	if url == "" {

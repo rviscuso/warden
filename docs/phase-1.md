@@ -578,6 +578,11 @@ Precisely:
   remove anything is the `canary.cleanup` check, with the exact commands.
 - **Timeouts:** 90 s for the whole canary, cleanup included; the probe waits up to 10 s for the
   control file and for the proxy port; each probe connection or lookup has 3 s.
+- **Interrupts:** while the checks run (`init`, `check` and the checks `up` runs first), the first
+  SIGINT or SIGTERM cancels them instead of ending Warden: the canary stops, its cleanup still runs
+  (it ignores the cancellation and keeps its own 20 s), the report is printed, and the command exits
+  1 with "interrupted". `init` never pins after an interrupt. A second signal ends Warden at once.
+  The handling covers only the checks: at a prompt, Ctrl-C ends Warden as before.
 - `host.shared-mounts` runs before the canary and the canary is gone afterwards, so nothing is
   skipped in M4.
 
@@ -733,6 +738,11 @@ Precisely (decided in the M6 review):
   (the first budget may be spent), and exits 1 with the fix: `warden down`, then `warden up`. It is
   not an incident: no evidence file, nothing recorded. If the stop fails too, the fix is the stop
   command itself.
+- **An interrupt during the apply** (SIGINT or SIGTERM, from the `y` on) is handled the same way:
+  during `up -d` or during verification it stops what was started and exits 1, and is never
+  recorded as an incident. After verification has passed, an interrupt only ends the wait for the
+  URL: the containers are verified and keep running, and the message says to run `warden status`
+  or `warden down`.
 - **Post-start verification**, for `warden-proxy` and `warden-controller`:
   - `docker inspect --format '{{.State.Running}} {{.State.Pid}}'` must be `true` and a PID > 0;
   - that PID is `docker-init`; its children are found by reading `/proc/*/status` for `PPid`

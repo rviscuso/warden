@@ -59,7 +59,12 @@ func (f *Fake) OnFile(argv []string, path string) *Fake {
 }
 
 // Run implements docker.Runner.
-func (f *Fake) Run(_ context.Context, args []string, stdin io.Reader) ([]byte, []byte, int, error) {
+func (f *Fake) Run(ctx context.Context, args []string, stdin io.Reader) ([]byte, []byte, int, error) {
+	// Like the real runner: a call on a context that is already done doesn't
+	// run. It isn't recorded either.
+	if err := ctx.Err(); err != nil {
+		return nil, nil, -1, fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
+	}
 	var in []byte
 	if stdin != nil {
 		in, _ = io.ReadAll(stdin)
