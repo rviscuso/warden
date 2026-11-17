@@ -240,12 +240,14 @@ func TestWorkspaceMustBeAbsolute(t *testing.T) {
 }
 
 func TestRemoteControlName(t *testing.T) {
-	for _, n := range []string{"a", "Warden-1.x_y", strings.Repeat("z", 64)} {
+	for _, n := range []string{"a", "7", "Warden-1.x_y", "a-", "a.", strings.Repeat("z", 64)} {
 		if _, err := Parse(mutate(t, func(m map[string]any) { sub(m, "controller")["remote_control_name"] = n })); err != nil {
 			t.Errorf("%q: %v", n, err)
 		}
 	}
-	for _, n := range []string{"", "a b", "a/b", "x;y", "$(id)", strings.Repeat("z", 65), "é"} {
+	for _, n := range []string{"", "a b", "a/b", "x;y", "$(id)", strings.Repeat("z", 65), "é",
+		// It follows "claude --remote-control": never a flag.
+		"-", "-h", "--help", "--dangerously-skip-permissions", ".hidden", "_x"} {
 		expectError(t, mutate(t, func(m map[string]any) { sub(m, "controller")["remote_control_name"] = n }), "controller.remote_control_name: must match")
 	}
 }

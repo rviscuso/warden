@@ -155,7 +155,10 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-var remoteControlName = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
+// remoteControlName: it becomes the argument after "claude --remote-control",
+// so it must not start with "-", where it would be read as a flag
+// ("--dangerously-skip-permissions" matched the old pattern), or with ".".
+var remoteControlName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // Image references: a Docker repository name (optional registry host and
 // port, lowercase path components) followed by @sha256:<64 hex>, or a bare

@@ -269,7 +269,8 @@ Validation (each rule has a failing test):
   - punycode (`xn--…`) labels are allowed;
   - at most 253 characters overall and 63 per label;
   - duplicate entries are an error;
-- `remote_control_name` must match `^[a-zA-Z0-9._-]{1,64}$`;
+- `remote_control_name` must match `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`: it is the argument after
+  `claude --remote-control`, so it never starts with `-` (a flag) or `.`;
 - resources: `memory_mb` 256 to 65536; `cpus` 0.25 to 64 (fractions allowed); `pids` 64 to 32768;
 - `workspace` must be an absolute path.
 
