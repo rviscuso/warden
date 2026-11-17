@@ -6,6 +6,7 @@ package termsafe
 
 import (
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -61,4 +62,13 @@ func (w *Writer) Flush() error {
 	w.pending = false
 	_, err := w.W.Write([]byte{0xc2})
 	return err
+}
+
+// String returns s with the same characters removed as Writer removes.
+func String(s string) string {
+	var b strings.Builder
+	w := &Writer{W: &b}
+	w.Write([]byte(s)) // a strings.Builder never fails
+	w.Flush()
+	return b.String()
 }

@@ -147,6 +147,10 @@ func TestControllerRejects(t *testing.T) {
 		"url no time":    func(c *Controller) { c.URLFoundAt = nil },
 		"time no url":    func(c *Controller) { c.RemoteControlURL = "" },
 		"url with space": func(c *Controller) { c.RemoteControlURL = "https://claude.ai/code/a b" },
+		"url with esc":   func(c *Controller) { c.RemoteControlURL = "https://claude.ai/code/a\x1b]52;c;eA==\x07" },
+		"url with bell":  func(c *Controller) { c.RemoteControlURL = "https://claude.ai/code/a\x07" },
+		"url with c1":    func(c *Controller) { c.RemoteControlURL = "https://claude.ai/code/a\u009b31m" },
+		"url too long":   func(c *Controller) { c.RemoteControlURL = "https://claude.ai/code/" + strings.Repeat("a", 201) },
 	}
 	for name, fn := range cases {
 		s := sample()

@@ -748,7 +748,12 @@ Precisely (decided in the M6 review):
   including OSC 8 hyperlinks, whose target is kept) are removed before matching
   `https://claude\.ai/code/\S+`. The **first** match wins: Claude Code prints the URL at startup,
   before the agent does anything, and a later URL may be one the agent printed (the log is
-  agent-influenced output). If `up -d` kept the recorded controller container (same ID) and a URL is
+  agent-influenced output). That first match must then be, in full,
+  `https://claude.ai/code/` followed by 1 to 200 of `A-Z a-z 0-9 . _ ~ % / ? = & -` (the pattern
+  `state.RemoteControlURL`, which also guards what state stores): the URL is printed on the user's
+  terminal, so a control character or the rest of an escape sequence glued to it is refused
+  (`DESIGN.md` §2). A refused first match counts as no URL; a later one is never taken in its
+  place. If `up -d` kept the recorded controller container (same ID) and a URL is
   recorded, that URL is kept and the log isn't read. If the controller stops running, the wait ends
   at once. Found: saved in state and printed.
 - **No URL:** exit 1, the containers keep running, and the message says what to do: first run? log
@@ -763,8 +768,15 @@ Precisely (decided in the M6 review):
 - **`down`:** pin check, then `docker compose -p warden down` (5 minutes; never `-v`, never `-f`).
   The container IDs and any incident are cleared from state; the last applied file and URL are kept
   (the next `up` diffs against it; `status` shows the URL as the last one).
-- **`logs proxy|controller [-n N]`:** pin check, then `docker logs --tail N <container>`, stdout and
-  stderr passed through. A non-zero docker exit is exit 1.
+- **`logs proxy|controller [-n N]`:** pin check, then `docker logs --tail N <container>`, stdout to
+  stdout and stderr to stderr. A non-zero docker exit is exit 1.
+- **Container output is never printed raw** (`DESIGN.md` §2: the agent controls what its container
+  prints). `logs`, the log lines shown when no URL is found, and the process names in a failed
+  verification all go through `internal/termsafe`: every control character except newline and tab
+  is removed. The controller's log is a TTY log, so its escape sequences are removed whole first
+  (`controller.StripTerminal`, CR LF as one newline) and it reads as text rather than as `[31m`
+  leftovers; `termsafe` then removes whatever that one pass left. There is no raw mode:
+  `docker logs warden-controller` is the raw log, for a user who wants it.
 - **`host.shared-mounts` and Warden's own containers.** A container whose full ID is recorded in
   state is skipped only if every one of its mounts is one Warden gave it: for the controller, the
   resolved workspace at `/workspace` and the agent home at `/home/agent`; for the proxy, a

@@ -115,3 +115,16 @@ func TestVerifyWaitsForChild(t *testing.T) {
 		t.Fatalf("done %v err %v", done, err)
 	}
 }
+
+// TestProcessNameIsSafe: a process names itself (prctl), and a failed
+// verification prints the name on the user's terminal.
+func TestProcessNameIsSafe(t *testing.T) {
+	root := t.TempDir()
+	m := hardenedTree(1000, 1000)
+	m[501] = procStatus("a\x1b]0;t\x07b", 500, 0, 0, zeroCaps, zeroCaps, 1)
+	fakeProc(t, root, m)
+	_, err := verifyProcesses(root, ControllerName, 500, 1000, 1000)
+	if err == nil || !strings.Contains(err.Error(), "a]0;tb") || strings.ContainsAny(err.Error(), "\x1b\x07") {
+		t.Fatalf("got %q", err)
+	}
+}

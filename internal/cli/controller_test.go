@@ -403,6 +403,19 @@ func TestLogs(t *testing.T) {
 	if r.code != ExitOK || r.stdout != "{\"event\":\"open\"}\n" || r.stderr != "warn\n" {
 		t.Fatalf("%+v", r)
 	}
+	// Untrusted output: no control character reaches the terminal. The
+	// controller's TTY log loses its escape sequences whole; whatever a single
+	// pass leaves (here a nested sequence that becomes an OSC 52) loses its
+	// control characters. The proxy's log keeps its text as it is.
+	h.fake.On([]string{"logs", "--tail", "7", "warden-controller"}, dockertest.Response{
+		Stdout: "\x1b[31mred\x1b[0m line\r\nclip\x1b\x1b\\]52;c;eA==\x07 bell\x07\n"})
+	if r := h.run("logs", "controller", "-n", "7"); r.code != ExitOK || r.stdout != "red line\nclip]52;c;eA== bell\n" {
+		t.Fatalf("%q", r.stdout)
+	}
+	h.fake.On([]string{"logs", "--tail", "8", "warden-proxy"}, dockertest.Response{Stdout: "{\"host\":\"a\"}\n\x1b[2Jx\n", Stderr: "e\x1b]0;t\x07\n"})
+	if r := h.run("logs", "proxy", "-n", "8"); r.stdout != "{\"host\":\"a\"}\n[2Jx\n" || r.stderr != "e]0;t\n" {
+		t.Fatalf("%q %q", r.stdout, r.stderr)
+	}
 	h.fake.On([]string{"logs", "--tail", "100", "warden-controller"}, dockertest.Response{ExitCode: 1, Stderr: "Error: No such container: warden-controller\n"})
 	if r := h.run("logs", "controller"); r.code != ExitFail {
 		t.Fatalf("%+v", r)

@@ -50,8 +50,12 @@ type Controller struct {
 
 var (
 	containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// RemoteControlURL is the URL pattern up looks for in the controller's log.
-	RemoteControlURL = regexp.MustCompile(`^https://claude\.ai/code/\S+$`)
+	// RemoteControlURL is what a Remote Control URL must look like before
+	// Warden stores or prints it: only URL characters after the fixed prefix,
+	// and a bounded length. The URL comes from the controller's log, which the
+	// agent can write to, so nothing that could be a control character or the
+	// start of an escape sequence is accepted (DESIGN.md, section 2).
+	RemoteControlURL = regexp.MustCompile(`^https://claude\.ai/code/[A-Za-z0-9._~%/?=&-]{1,200}$`)
 )
 
 // Validate checks the controller record.

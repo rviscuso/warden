@@ -47,3 +47,12 @@ func TestWriterSplit(t *testing.T) {
 		t.Errorf("trailing: %q", got)
 	}
 }
+
+func TestString(t *testing.T) {
+	if got := String("a\x1b]52;c;eA==\x07b\xc2\x9bc\td\n"); got != "a]52;c;eA==bc\td\n" {
+		t.Errorf("got %q", got)
+	}
+	if got := String("end\xc2"); got != "end\xc2" {
+		t.Errorf("trailing: %q", got)
+	}
+}
