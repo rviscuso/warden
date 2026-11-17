@@ -368,7 +368,11 @@ Precisely:
   field for privileged mode, capabilities to add, devices, host namespaces, ports or arbitrary
   volumes. `Validate` checks the rendered JSON against an allowlist of keys and the exact hardened
   values above, refuses `user` 0 or empty, and refuses any bind mount whose source is, is inside, or
-  contains the Docker socket. Each rule has a failing test.
+  contains the Docker socket. It also refuses a `$` anywhere in the file, key or value: Docker
+  Compose substitutes `$VAR` and `${VAR}` after `Validate` has seen the bytes, so a workspace
+  `/srv/a$b` would be shown and approved as written and mounted as `/srv/a`. `$$` would escape it,
+  but the approved file must mean what it says to a reader, so `$` is refused, not escaped. Each
+  rule has a failing test.
 - Every service runs with an explicit `entrypoint`, so an image's own entrypoint never wraps it.
 
 ## Networks

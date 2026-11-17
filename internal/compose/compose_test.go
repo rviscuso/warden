@@ -306,3 +306,48 @@ func TestValidateRefusesUnknownMPTCP(t *testing.T) {
 		t.Fatal("Render accepted an unknown MPTCP policy")
 	}
 }
+
+// TestValidateRefusesDollar: Docker Compose substitutes $VAR and ${VAR}
+// after Validate has seen the file. A workspace "/srv/a$b" used to be
+// validated and shown as written, then mounted as "/srv/a".
+func TestValidateRefusesDollar(t *testing.T) {
+	edits := map[string]func(f *File){
+		"bind source": func(f *File) {
+			s := f.Services["proxy"]
+			s.Volumes = []Bind{BindMount("/srv/a$b", "/workspace", false)}
+			f.Services["proxy"] = s
+		},
+		"braces": func(f *File) {
+			s := f.Services["proxy"]
+			s.Volumes = []Bind{BindMount("/srv/${HOME}", "/workspace", false)}
+			f.Services["proxy"] = s
+		},
+		"escaped": func(f *File) { // "$$" is Compose's escape; still refused
+			s := f.Services["proxy"]
+			s.Volumes = []Bind{BindMount("/srv/a$$b", "/workspace", false)}
+			f.Services["proxy"] = s
+		},
+		"command":     func(f *File) { s := f.Services["probe"]; s.Command = []string{"probe", "$X"}; f.Services["probe"] = s },
+		"environment": func(f *File) { s := f.Services["proxy"]; s.Environment["A"] = "x$Y"; f.Services["proxy"] = s },
+		"env key":     func(f *File) { s := f.Services["proxy"]; s.Environment["A$B"] = "x"; f.Services["proxy"] = s },
+		"network name": func(f *File) {
+			f.Networks["sandbox"] = Network{Name: "n$x", Internal: true}
+		},
+	}
+	for name, edit := range edits {
+		f := validFile(t)
+		edit(&f)
+		if _, err := Render(f, pol); err == nil || !strings.Contains(err.Error(), `contains "$"`) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// On the bytes, too: Validate holds whatever produced them.
+	b, err := Render(validFile(t), pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(b), `"warden-test"`, `"warden-$x"`, 1)
+	if err := Validate([]byte(bad), pol); err == nil || !strings.Contains(err.Error(), `contains "$"`) {
+		t.Errorf("Validate: %v", err)
+	}
+}

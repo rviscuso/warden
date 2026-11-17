@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/rviscuso/warden/internal/config"
 	"github.com/rviscuso/warden/internal/hardening"
@@ -110,6 +111,9 @@ func Validate(b []byte, p Policy) error {
 	}
 	if dec.More() {
 		return errors.New("compose: trailing data")
+	}
+	if err := noInterpolation(top, "file"); err != nil {
+		return err
 	}
 	if err := onlyKeys("file", top, []string{"name", "services", "networks"}, []string{"name", "services", "networks"}); err != nil {
 		return err
@@ -328,6 +332,38 @@ func validateBind(v any, p Policy, targets map[string]bool) error {
 		}
 		if rel != "" {
 			return fmt.Errorf("volume source %s %s the Docker socket %s: never mounted", src, rel, s)
+		}
+	}
+	return nil
+}
+
+// noInterpolation refuses a "$" anywhere in the file, in a key or a value.
+// Docker Compose substitutes $VAR and ${VAR} in the file after Validate has
+// seen it, from Warden's environment, so a workspace path "/srv/a$b" would
+// be validated, shown and approved as written and then mounted as "/srv/a".
+// "$$" would escape it, but the approved file must mean what it says to a
+// person reading it, so "$" is refused, not escaped. Nothing Warden
+// generates needs one.
+func noInterpolation(v any, where string) error {
+	switch x := v.(type) {
+	case string:
+		if strings.Contains(x, "$") {
+			return fmt.Errorf("compose: %s: %q contains \"$\", which Docker Compose would substitute; rename the path or value without it", where, x)
+		}
+	case map[string]any:
+		for _, k := range sortedKeys(x) {
+			if strings.Contains(k, "$") {
+				return fmt.Errorf("compose: %s: key %q contains \"$\", which Docker Compose would substitute", where, k)
+			}
+			if err := noInterpolation(x[k], where+"."+k); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, e := range x {
+			if err := noInterpolation(e, fmt.Sprintf("%s[%d]", where, i)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
