@@ -81,7 +81,7 @@ func TestGuidedInit(t *testing.T) {
 		"100", "", // memory
 		"lots", "", // cpus
 		"", // pids
-		"bad name!", "",
+		"bad name!", "--help", "",
 		"busybox:latest", // a tag
 		ctrlID,
 		"y",
@@ -100,6 +100,7 @@ func TestGuidedInit(t *testing.T) {
 		`✗ "100": give a whole number of MB between 256 and 65536`,
 		`✗ "lots": give a number between 0.25 and 64`,
 		`✗ "bad name!": use 1 to 64 letters`,
+		`✗ "--help": use 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit`,
 		`has a tag; pin by digest only`,
 		"✓ runtime image " + images.RuntimeImage,
 		"✓ controller image " + ctrlID,

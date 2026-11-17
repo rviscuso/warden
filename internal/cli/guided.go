@@ -122,7 +122,7 @@ func (g *guide) run() error {
 	}
 	name, err := g.askValid("Remote Control name", guidedName, func(s string) error {
 		if config.ValidateRemoteControlName(s) != nil {
-			return fmt.Errorf("%q: use 1 to 64 letters, digits, '.', '_' or '-', such as my-repo", s)
+			return fmt.Errorf("%q: use 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit, such as my-repo", s)
 		}
 		return nil
 	})
