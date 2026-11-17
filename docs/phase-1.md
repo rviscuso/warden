@@ -730,9 +730,14 @@ Precisely (decided in the M6 review):
 - **Post-start verification**, for `warden-proxy` and `warden-controller`:
   - `docker inspect --format '{{.State.Running}} {{.State.Pid}}'` must be `true` and a PID > 0;
   - that PID is `docker-init`; its children are found by reading `/proc/*/status` for `PPid`
-    (no dependency on `CONFIG_PROC_CHILDREN`); there must be exactly one, waited for up to 10 s;
-  - for both the init process and its child: `Uid` and `Gid` (all four fields) equal the user's;
-    `CapEff`, `CapBnd`, `CapPrm` and `CapAmb` are zero; `NoNewPrivs` is 1; `Seccomp` is 2.
+    (no dependency on `CONFIG_PROC_CHILDREN`); there must be at least one, waited for up to 10 s;
+  - for the init process and every child of it: `Uid` and `Gid` (all four fields) equal the user's;
+    `CapEff`, `CapBnd`, `CapPrm` and `CapAmb` are zero; `NoNewPrivs` is 1; `Seccomp` is 2;
+  - more than one child is not a failure (it was "exactly one" until a review found the problem):
+    `up` verifies a container that is already running whenever it is run again, and by then init
+    has adopted any process whose parent exited, such as a background job the agent left;
+  - a process that exits while `/proc` is being read (`ENOENT` at the open, `ESRCH` at the read) is
+    skipped; any other read error fails.
 - **A verification failure is a security event: the evidence is kept.**
   - `docker compose -p warden -f <file> stop -t 0`, so the agent stops running at once.
   - `docker inspect` of both containers is saved to `<state>/incidents/<UTC time>.json` (0600;
