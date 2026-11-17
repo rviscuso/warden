@@ -16,8 +16,6 @@ set -euo pipefail
 
 # The Go build image, pinned by digest. Override with GO_IMAGE (also pinned).
 GO_IMAGE_PINNED="golang@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9" # golang:1.27-bookworm, from the operator's host
-# runtime_image for the canary live tests, pinned by digest. Override with RUNTIME_IMAGE (also pinned).
-RUNTIME_IMAGE_PINNED="busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662" # busybox:stable, from the operator's host
 
 die() { echo "e2e: $*" >&2; exit 1; }
 
@@ -30,8 +28,11 @@ REPO=${2:-https://github.com/rviscuso/warden}
 GO_IMAGE=${GO_IMAGE:-$GO_IMAGE_PINNED}
 [[ -n $GO_IMAGE ]] || die "no Go image digest pinned yet: set GO_IMAGE=golang@sha256:<64 hex>"
 [[ $GO_IMAGE =~ ^[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || die "GO_IMAGE must be pinned by digest (name@sha256:<64 hex>), not a tag: $GO_IMAGE"
-RUNTIME_IMAGE=${RUNTIME_IMAGE:-$RUNTIME_IMAGE_PINNED}
-[[ $RUNTIME_IMAGE =~ ^[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || die "RUNTIME_IMAGE must be pinned by digest (name@sha256:<64 hex>), not a tag: $RUNTIME_IMAGE"
+
+# Optional: WARDEN_E2E_BUILD=1 also tests the guided init's reference build (takes
+# minutes and network; the built image is removed afterwards unless it already existed).
+WARDEN_E2E_BUILD=${WARDEN_E2E_BUILD:-}
+[[ -z $WARDEN_E2E_BUILD || $WARDEN_E2E_BUILD == 1 ]] || die "WARDEN_E2E_BUILD must be 1 or unset"
 
 # Optional: the controller image you built (images/controller), by image ID or digest,
 # for TestControllerImage. Without it that test reports SKIP. Never built or pulled here.
@@ -73,8 +74,6 @@ mkdir -m 700 "$ROOT"/{ws,config,state,share,tmp,gocache,out,docker-config}
 
 dock image inspect "$GO_IMAGE" >/dev/null 2>&1 ||
 	die "$GO_IMAGE is not local and nothing is pulled; pull it yourself first: docker pull $GO_IMAGE"
-dock image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1 ||
-	die "$RUNTIME_IMAGE is not local and nothing is pulled; pull it yourself first: docker pull $RUNTIME_IMAGE"
 if [[ -n $CONTROLLER_IMAGE ]]; then
 	dock image inspect "$CONTROLLER_IMAGE" >/dev/null 2>&1 ||
 		die "$CONTROLLER_IMAGE is not local; build it first: docker build -t warden-controller images/controller"
@@ -89,10 +88,16 @@ HEAD=$(git -C "$ROOT/src" rev-parse HEAD)
 SELF=$(readlink -f -- "${BASH_SOURCE[0]}")
 cmp -s -- "$SELF" "$ROOT/src/scripts/e2e.sh" ||
 	die "this script ($SELF) is not $SHA's scripts/e2e.sh; run that commit's own copy: git checkout --detach $SHA && scripts/e2e.sh $SHA"
+# The runtime image is pinned in the tested commit's code; nothing is pulled.
+RUNTIME_IMAGE=$(grep -oE '^const RuntimeImage = "busybox@sha256:[0-9a-f]{64}"$' "$ROOT/src/images/images.go" | cut -d'"' -f2) ||
+	die "no runtime image pin in images/images.go"
+dock image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1 ||
+	die "$RUNTIME_IMAGE is not local and nothing is pulled; pull it yourself first: docker pull $RUNTIME_IMAGE"
 echo "e2e: testing $SHA"
 echo "e2e: Go image $GO_IMAGE"
 echo "e2e: runtime image $RUNTIME_IMAGE"
 echo "e2e: controller image ${CONTROLLER_IMAGE:-none (TestControllerImage will SKIP)}"
+if [[ -n $WARDEN_E2E_BUILD ]]; then echo "e2e: reference build on"; else echo "e2e: reference build off (WARDEN_E2E_BUILD=1 to test it)"; fi
 
 # One container per step, argv only. The source is read-only.
 in_go() {
@@ -128,8 +133,8 @@ env \
 	WARDEN_E2E_BIN="$ROOT/out/warden" \
 	WARDEN_E2E_SHA="$SHA" \
 	WARDEN_E2E_GO_IMAGE="$GO_IMAGE" \
-	WARDEN_E2E_RUNTIME_IMAGE="$RUNTIME_IMAGE" \
 	WARDEN_E2E_CONTROLLER_IMAGE="$CONTROLLER_IMAGE" \
+	WARDEN_E2E_BUILD="$WARDEN_E2E_BUILD" \
 	WARDEN_E2E_CONTAINERS="$ROOT/containers" \
 	WARDEN_E2E_SOCKET="$SOCKET" \
 	WARDEN_E2E_WORKSPACE="$ROOT/ws" \

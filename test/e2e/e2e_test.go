@@ -23,8 +23,8 @@ import (
 //	WARDEN_E2E_BIN         the warden binary built from the tested commit
 //	WARDEN_E2E_SHA         the commit being tested
 //	WARDEN_E2E_GO_IMAGE    the Go build image (pinned by digest, already local)
-//	WARDEN_E2E_RUNTIME_IMAGE  runtime_image for the canary (pinned by digest, already local)
 //	WARDEN_E2E_CONTROLLER_IMAGE  optional: the controller image to test (already local)
+//	WARDEN_E2E_BUILD       optional: 1 to test the guided init's reference build
 //	WARDEN_E2E_CONTAINERS  file to append created container IDs to, for the trap
 //	WARDEN_E2E_SOCKET      the Docker socket (default /var/run/docker.sock)
 //	WARDEN_E2E_WORKSPACE   a workspace inside the temp root
@@ -122,7 +122,6 @@ func (s sandbox) initialized(t *testing.T) {
 	}
 	cfg := strings.Replace(example, `"/path/to/your/repo"`, `"`+s.ws+`"`, 1)
 	cfg = strings.Replace(cfg, `"/var/run/docker.sock"`, `"`+socket+`"`, 1)
-	cfg = strings.Replace(cfg, `"busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000"`, `"`+mustEnv(t, "WARDEN_E2E_RUNTIME_IMAGE")+`"`, 1)
 	if err := os.WriteFile(s.configFile(), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -2,8 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/rviscuso/warden/images"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -29,16 +32,20 @@ const (
 // workspace and XDG dirs as siblings, a real unix socket, a fake docker
 // binary file and a scripted runner.
 type host struct {
-	t     *testing.T
-	root  string
-	home  string
-	ws    string
-	sock  string
-	xdg   map[string]string
-	fake  *dockertest.Fake
-	stdin string
-	now   time.Time
-	cn    *checkstest.Canary
+	t       *testing.T
+	root    string
+	home    string
+	ws      string
+	sock    string
+	xdg     map[string]string
+	fake    *dockertest.Fake
+	stdin   string
+	tty     bool // stdin counts as a terminal
+	cwd     string
+	gits    []string   // git init calls (dirs)
+	envHook func(*env) // changes the env before the run
+	now     time.Time
+	cn      *checkstest.Canary
 }
 
 func newHost(t *testing.T) *host {
@@ -58,12 +65,14 @@ func newHost(t *testing.T) *host {
 		},
 		now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC),
 	}
+	h.cwd = root
 	for _, d := range []string{h.home, h.ws, filepath.Join(root, "hostfs/sys/fs/cgroup"), filepath.Join(root, "bin")} {
 		os.MkdirAll(d, 0o700)
 	}
 	os.WriteFile(filepath.Join(root, "hostfs/sys/fs/cgroup/cgroup.controllers"), []byte("cpu\n"), 0o644)
 	os.MkdirAll(filepath.Join(root, "hostfs/proc/sys/net/mptcp"), 0o755) // a kernel with MPTCP
 	os.WriteFile(filepath.Join(root, "bin/docker"), nil, 0o755)
+	os.WriteFile(filepath.Join(root, "bin/git"), nil, 0o755)
 	h.sock = filepath.Join(root, "d.sock")
 	l, err := net.Listen("unix", h.sock)
 	if err != nil {
@@ -81,7 +90,7 @@ func (h *host) script(id string) {
 	h.fake.On([]string{"info", "--format", "{{json .}}"}, dockertest.Response{Stdout: `{"ID":"` + id + `","CgroupVersion":"2","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin"]}`})
 	h.fake.On([]string{"version", "--format", "{{json .}}"}, dockertest.Response{Stdout: `{"Server":{"Version":"29.1.3","Components":[{"Name":"runc","Version":"1.4.0"},{"Name":"containerd","Version":"2.2.2"}]}}`})
 	h.fake.On([]string{"ps", "-aq", "--no-trunc"}, dockertest.Response{})
-	h.cn = checkstest.Script(h.t, h.fake, h.root, filepath.Join(h.stateDir(), "canary"), exampleRuntimeImage)
+	h.cn = checkstest.Script(h.t, h.fake, h.root, filepath.Join(h.stateDir(), "canary"), images.RuntimeImage)
 }
 
 func (h *host) configDir() string { return filepath.Join(h.xdg["XDG_CONFIG_HOME"], "warden") }
@@ -103,10 +112,11 @@ func (h *host) run(args ...string) result {
 	h.t.Helper()
 	var out, errb bytes.Buffer
 	e := &env{
-		stdin:  strings.NewReader(h.stdin),
-		stdout: &out,
-		stderr: &errb,
-		getenv: func(k string) string { return h.xdg[k] },
+		stdin:      strings.NewReader(h.stdin),
+		isTerminal: func(io.Reader) bool { return h.tty },
+		stdout:     &out,
+		stderr:     &errb,
+		getenv:     func(k string) string { return h.xdg[k] },
 		buildInfo: func() (*debug.BuildInfo, bool) {
 			return &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-test"}}, true
 		},
@@ -127,7 +137,17 @@ func (h *host) run(args ...string) result {
 		canaryListen: h.cn.Net.Listen,
 		rand:         checkstest.ZeroReader{},
 		// Fixture system dirs: t.TempDir() may be under /tmp (see checks tests).
-		systemDirs: []string{filepath.Join(h.root, "hostfs/etc")},
+		systemDirs:    []string{filepath.Join(h.root, "hostfs/etc")},
+		getwd:         func() (string, error) { return h.cwd, nil },
+		defaultSocket: h.sock,
+		gitPaths:      []string{filepath.Join(h.root, "bin/git")},
+		gitInit: func(_ context.Context, bin, dir, home string) error {
+			h.gits = append(h.gits, dir)
+			return os.MkdirAll(filepath.Join(dir, ".git"), 0o700)
+		},
+	}
+	if h.envHook != nil {
+		h.envHook(e)
 	}
 	code := run(e, append([]string{"warden"}, args...))
 	return result{code, out.String(), errb.String()}
@@ -155,7 +175,8 @@ func TestInitWithoutConfigPrintsExample(t *testing.T) {
 		}
 	}
 	if !strings.Contains(r.stderr, "no config at "+filepath.Join(h.configDir(), "config.json")) ||
-		!strings.Contains(r.stderr, "egress.allow") || !strings.Contains(r.stderr, ".new; mv ") {
+		!strings.Contains(r.stderr, "egress.allow") || !strings.Contains(r.stderr, ".new; mv ") ||
+		!strings.Contains(r.stderr, "run warden init in a terminal") || strings.Contains(r.stderr, "runtime_image") {
 		t.Fatalf("stderr:\n%s", r.stderr)
 	}
 	// stdout is exactly the example, which is valid JSON and a valid config.

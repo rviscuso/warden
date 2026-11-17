@@ -14,7 +14,6 @@ var (
 	validJS = `{
   "version": 1,
   "docker": { "socket": "/var/run/docker.sock" },
-  "runtime_image": "busybox@` + digest + `",
   "egress": { "allow": ["api.anthropic.com", "platform.claude.com"] },
   "controller": {
     "image": "` + digest + `",
@@ -159,8 +158,7 @@ func TestImages(t *testing.T) {
 			t.Errorf("%q: got %v, want error containing %q", ref, err, want)
 		}
 	}
-	// Both image fields are validated.
-	expectError(t, mutate(t, func(m map[string]any) { m["runtime_image"] = "busybox:latest" }), "runtime_image:")
+	// The image field is validated.
 	expectError(t, mutate(t, func(m map[string]any) { sub(m, "controller")["image"] = "warden-controller" }), "controller.image:")
 }
 
@@ -282,15 +280,23 @@ func TestResources(t *testing.T) {
 func TestReportsAllErrors(t *testing.T) {
 	_, err := Parse(mutate(t, func(m map[string]any) {
 		m["version"] = 2
-		m["runtime_image"] = "busybox"
 		sub(m, "controller")["remote_control_name"] = ""
 	}))
 	if err == nil {
 		t.Fatal("expected errors")
 	}
-	for _, want := range []string{"version:", "runtime_image:", "remote_control_name:"} {
+	for _, want := range []string{"version:", "remote_control_name:"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in %q", want, err)
 		}
 	}
+}
+
+// runtime_image was removed in M7: Warden pins the image in code. An old
+// config gets the fix, not a generic unknown-field error.
+func TestRuntimeImageRemoved(t *testing.T) {
+	data := mutate(t, func(m map[string]any) { m["runtime_image"] = "busybox@" + digest })
+	expectError(t, data, "runtime_image was removed: Warden pins it; delete the line")
+	// A case variant is still refused, by the strict decoder.
+	expectError(t, mutate(t, func(m map[string]any) { m["Runtime_image"] = "x" }), "Runtime_image")
 }

@@ -91,3 +91,12 @@ func (f *Fake) Called(argv []string) bool {
 	}
 	return false
 }
+
+// Stream implements docker.Streamer from the same script: the response's
+// Stdout then Stderr are written to w.
+func (f *Fake) Stream(ctx context.Context, args []string, w io.Writer) (int, error) {
+	stdout, stderr, code, err := f.Run(ctx, args, nil)
+	w.Write(stdout)
+	w.Write(stderr)
+	return code, err
+}

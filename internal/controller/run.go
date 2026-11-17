@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rviscuso/warden/images"
 	"io"
 	"io/fs"
 	"os"
@@ -257,7 +258,7 @@ func Up(env Env) error {
 	res := cfg.Controller.Resources
 	f, err := Project(Params{
 		UID: env.UID, GID: env.GID,
-		RuntimeImage: cfg.RuntimeImage, Binary: bin, Allow: cfg.Egress.Allow,
+		RuntimeImage: images.RuntimeImage, Binary: bin, Allow: cfg.Egress.Allow,
 		Image: cfg.Controller.Image, Workspace: ws, AgentHome: home,
 		RemoteControlName: cfg.Controller.RemoteControlName,
 		Resources:         hardening.Resources{MemoryMB: res.MemoryMB, CPUs: res.CPUs, Pids: res.PIDs},

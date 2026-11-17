@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/rviscuso/warden/images"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,7 +222,7 @@ func TestUpVerificationFailureKeepsEvidence(t *testing.T) {
 	if r.code != ExitFail || !strings.Contains(r.stderr, "a post-start verification failed") || strings.Contains(r.stderr, "Apply?") {
 		t.Fatalf("second up: %d\n%s", r.code, r.stderr)
 	}
-	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "exited", exampleRuntimeImage)})
+	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "exited", images.RuntimeImage)})
 	h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: inspectJSON(controllerID, "exited", "sha256:x")})
 	if r := h.run("status"); !strings.Contains(r.stdout, "Incident: a post-start verification failed") {
 		t.Errorf("status:\n%s", r.stdout)
@@ -355,7 +356,7 @@ func inspectJSON(id, status, image string) string {
 func TestStatus(t *testing.T) {
 	h := upHost(t)
 	h.run("up")
-	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", exampleRuntimeImage)})
+	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", images.RuntimeImage)})
 	h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: inspectJSON(strings.Repeat("3", 64), "exited", "sha256:x")})
 	r := h.run("status")
 	for _, want := range []string{
@@ -467,7 +468,7 @@ func TestStatusFindsURLAfterLogin(t *testing.T) {
 	if r := h.run("up"); r.code != ExitFail {
 		t.Fatalf("up: %d", r.code)
 	}
-	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", exampleRuntimeImage)})
+	h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", images.RuntimeImage)})
 	h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: inspectJSON(controllerID, "running", "sha256:x")})
 	h.fake.On(logsArgs, dockertest.Response{Stdout: "Please log in.\nLogged in.\n" + testURL + "\n"})
 	r := h.run("status")
@@ -490,7 +491,7 @@ func TestStatusLooksOnlyAtWardensRunningController(t *testing.T) {
 		h.scriptUp("Please log in.\n")
 		h.run("up")
 		before := countCalls(h, logsArgs...)
-		h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", exampleRuntimeImage)})
+		h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", images.RuntimeImage)})
 		h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: ctl})
 		if r := h.run("status"); r.code != ExitOK || countCalls(h, logsArgs...) != before {
 			t.Errorf("%s: code %d, log read %d times", name, r.code, countCalls(h, logsArgs...)-before)

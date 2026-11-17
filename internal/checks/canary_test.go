@@ -2,6 +2,7 @@ package checks
 
 import (
 	"errors"
+	"github.com/rviscuso/warden/images"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 	"github.com/rviscuso/warden/internal/wardenbin/wardenbintest"
 )
 
-const testRuntimeImage = "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+const testRuntimeImage = images.RuntimeImage
 
 var argsImage = checkstest.ArgsImage(testRuntimeImage)
 
@@ -113,26 +114,14 @@ func TestCanaryImageNotLocal(t *testing.T) {
 	h := newHarness(t)
 	h.fake.On(argsImage, dockertest.Response{ExitCode: 1, Stderr: "Error: No such image: " + testRuntimeImage})
 	rep := h.run()
-	r := expect(t, rep, "canary.image", Fail, "is not local; Warden never pulls")
-	if r.Fix != "docker pull "+testRuntimeImage {
+	r := expect(t, rep, "canary.image", Fail, "is not local; the canary never pulls")
+	if r.Fix != "docker pull "+testRuntimeImage+", or run warden init on a terminal to pull it" {
 		t.Errorf("fix %q", r.Fix)
 	}
 	expect(t, rep, "canary.caps", Fail, "not run: depends on canary.image")
 	expect(t, rep, "canary.cleanup", Fail, "not run: depends on canary.image")
 	if h.fake.Called(checkstest.ArgsCreate) {
 		t.Fatal("created the project without the image")
-	}
-}
-
-func TestCanaryImageIDFix(t *testing.T) {
-	h := newHarness(t)
-	id := "sha256:" + strings.Repeat("1", 64)
-	cfg, _ := os.ReadFile(filepath.Join(h.root, "config/warden/config.json"))
-	os.WriteFile(filepath.Join(h.root, "config/warden/config.json"), []byte(strings.Replace(string(cfg), testRuntimeImage, id, 1)), 0o600)
-	h.fake.On([]string{"image", "inspect", "--format", "{{.Id}}", id}, dockertest.Response{ExitCode: 1, Stderr: "Error: No such image"})
-	r := expect(t, h.run(), "canary.image", Fail, "not local")
-	if !strings.Contains(r.Fix, "load or build the image") {
-		t.Errorf("fix %q", r.Fix)
 	}
 }
 
