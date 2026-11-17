@@ -56,6 +56,10 @@ type Env struct {
 	Stdout, Stderr io.Writer
 	Now            func() time.Time
 	Sleep          func(time.Duration)
+	// Interruptible returns a context that SIGINT or SIGTERM cancels. up uses
+	// it from the apply on, in place of Ctx, so an interrupt stops what was
+	// started instead of leaving it running unverified. nil: Ctx throughout.
+	Interruptible func() (context.Context, context.CancelFunc)
 }
 
 // Error is a failure with the exact fix for the user, if there is one.
@@ -99,7 +103,14 @@ const runInit = "run warden init"
 
 // open loads config and state and checks the daemon pin. Every command
 // here starts with it: a different daemon's containers mean nothing.
-func open(env Env) (*session, error) {
+//
+// needConfig is true for up, which builds the sandbox from the config. down,
+// status and logs work from state alone (the pinned socket and the recorded
+// containers), so a config that doesn't load must not stop them: a typo in
+// config.json would otherwise leave no way to stop the sandbox with Warden.
+// They say so on stderr and go on with session.cfg nil. A config that does
+// load is still held to the pin: its socket must be the pinned one.
+func open(env Env, needConfig bool) (*session, error) {
 	if env.Ctx == nil {
 		env.Ctx = context.Background()
 	}
@@ -114,7 +125,11 @@ func open(env Env) (*session, error) {
 	cfgFile := env.Dirs.ConfigFile()
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
-		return nil, fail("edit "+paths.ShellQuote(cfgFile)+", then run warden check", "%v", err)
+		if needConfig {
+			return nil, fail("edit "+paths.ShellQuote(cfgFile)+", then run warden check", "%v", err)
+		}
+		cfg = nil
+		fmt.Fprintf(env.Stderr, "note: %s could not be loaded (%s); using the pinned daemon from Warden's state\n", cfgFile, firstLine(err))
 	}
 	st, err := state.Load(env.Dirs.StateFile())
 	if errors.Is(err, fs.ErrNotExist) {
@@ -123,7 +138,7 @@ func open(env Env) (*session, error) {
 	if err != nil {
 		return nil, fail("inspect "+paths.ShellQuote(env.Dirs.StateFile())+"; warden init re-pins after approval", "%v", err)
 	}
-	if cfg.Docker.Socket != st.Daemon.Socket {
+	if cfg != nil && cfg.Docker.Socket != st.Daemon.Socket {
 		return nil, fail("daemon changed; re-run init",
 			"docker.socket %s is not the pinned socket %s", cfg.Docker.Socket, st.Daemon.Socket)
 	}
@@ -166,6 +181,15 @@ func (s *session) docker(ctx context.Context, args ...string) ([]byte, error) {
 		return out, fmt.Errorf("docker %s exited %d: %s", strings.Join(firstArgs(args, 2), " "), code, msg)
 	}
 	return out, nil
+}
+
+// firstLine is the first line of err: a config can fail many rules at once.
+func firstLine(err error) string {
+	line, _, more := strings.Cut(err.Error(), "\n")
+	if more {
+		line += "; …"
+	}
+	return line
 }
 
 func firstArgs(a []string, n int) []string {
@@ -224,7 +248,7 @@ func ComposeFile(d paths.Dirs) string { return filepath.Join(d.ComposeDir(), "wa
 // applied one, and on "y" starts the proxy and the controller, verifies
 // them and reads the Remote Control URL.
 func Up(env Env) error {
-	s, err := open(env)
+	s, err := open(env, true)
 	if err != nil {
 		return err
 	}
@@ -294,6 +318,16 @@ func Up(env Env) error {
 		return fail("", "nothing applied")
 	}
 
+	// From here on up makes things in Docker, so an interrupt is handled
+	// rather than left to kill warden: before verification it stops what was
+	// started (abort). Not earlier: a read from the terminal can't be
+	// canceled, and at the prompt there is nothing to stop.
+	if env.Interruptible != nil {
+		ictx, stop := env.Interruptible()
+		defer stop()
+		env.Ctx, s.env.Ctx = ictx, ictx
+	}
+
 	if err := ensurePrivateDir(env.Dirs.ComposeDir(), env.UID); err != nil {
 		return err
 	}
@@ -323,6 +357,11 @@ func Up(env Env) error {
 
 	for _, name := range []string{ProxyName, ControllerName} {
 		if verr := s.verify(name); verr != nil {
+			if env.Ctx.Err() != nil {
+				// The docker calls failed because of the interrupt: nothing was
+				// found wrong, so this is no incident. Still unverified: stop.
+				return s.abort(file, errors.New("interrupted during verification"))
+			}
 			return s.incident(ctx, file, verr)
 		}
 	}
@@ -334,6 +373,10 @@ func Up(env Env) error {
 	}
 	url, log, err := s.waitURL()
 	if err != nil {
+		if env.Ctx.Err() != nil {
+			return fail("run warden status to look for the URL again, or warden down to stop",
+				"interrupted while waiting for the Remote Control URL; the containers are verified and still running")
+		}
 		return err
 	}
 	if url == "" {
@@ -507,7 +550,7 @@ func (s *session) waitURL() (string, []byte, error) {
 
 // Down stops and removes Warden's containers and networks, never volumes.
 func Down(env Env) error {
-	s, err := open(env)
+	s, err := open(env, false)
 	if err != nil {
 		return err
 	}
@@ -551,7 +594,7 @@ type StatusReport struct {
 
 // Status reports the pin, both containers and the last URL.
 func Status(env Env, jsonOut bool) error {
-	s, err := open(env)
+	s, err := open(env, false)
 	if err != nil {
 		return err
 	}
@@ -650,7 +693,7 @@ func Logs(env Env, which string, n int) error {
 	if name == "" || n <= 0 {
 		return fmt.Errorf("logs: bad arguments %q %d", which, n)
 	}
-	s, err := open(env)
+	s, err := open(env, false)
 	if err != nil {
 		return err
 	}

@@ -640,3 +640,53 @@ func TestUpFailureStopFails(t *testing.T) {
 		t.Fatalf("%d\n%s", r.code, r.stderr)
 	}
 }
+
+// TestDownStatusLogsWithoutAConfig: down, status and logs work from state
+// alone. A config that doesn't load (a typo made while the sandbox is up)
+// must not leave the user without a way to stop it; up still refuses.
+func TestDownStatusLogsWithoutAConfig(t *testing.T) {
+	breakIt := map[string]func(file string){
+		"not JSON": func(f string) { os.WriteFile(f, []byte(`{"version": 1,`), 0o600) },
+		"a broken rule": func(f string) {
+			b, _ := os.ReadFile(f)
+			os.WriteFile(f, []byte(strings.Replace(string(b), `"memory_mb": 1536`, `"memory_mb": 1`, 1)), 0o600)
+		},
+		"unknown field": func(f string) {
+			b, _ := os.ReadFile(f)
+			os.WriteFile(f, []byte(strings.Replace(string(b), `"version": 1,`, `"version": 1, "privileged": true,`, 1)), 0o600)
+		},
+		"removed": func(f string) { os.Remove(f) },
+	}
+	for name, fn := range breakIt {
+		h := upHost(t)
+		if r := h.run("up"); r.code != ExitOK {
+			t.Fatalf("%s: up: %d\n%s", name, r.code, r.stderr)
+		}
+		fn(filepath.Join(h.configDir(), "config.json"))
+		h.fake.On([]string{"inspect", "--type", "container", "warden-proxy"}, dockertest.Response{Stdout: inspectJSON(proxyID, "running", images.RuntimeImage)})
+		h.fake.On([]string{"inspect", "--type", "container", "warden-controller"}, dockertest.Response{Stdout: inspectJSON(controllerID, "running", "sha256:x")})
+		h.fake.On([]string{"logs", "--tail", "100", "warden-proxy"}, dockertest.Response{Stdout: "{}\n"})
+
+		note := "config.json could not be loaded"
+		if r := h.run("status"); r.code != ExitOK || !strings.Contains(r.stdout, "warden-controller: running") || !strings.Contains(r.stderr, note) {
+			t.Errorf("%s: status: %d\n%s%s", name, r.code, r.stdout, r.stderr)
+		}
+		if r := h.run("status", "--json"); r.code != ExitOK || !json.Valid([]byte(r.stdout)) {
+			t.Errorf("%s: status --json: %d, stdout not pure JSON:\n%s", name, r.code, r.stdout)
+		}
+		if r := h.run("logs", "proxy"); r.code != ExitOK || r.stdout != "{}\n" {
+			t.Errorf("%s: logs: %d\n%s%s", name, r.code, r.stdout, r.stderr)
+		}
+		ups := countCalls(h, "compose", "-p", "warden", "-f", h.composeFile(), "up", "-d")
+		if r := h.run("up"); r.code != ExitFail || countCalls(h, "compose", "-p", "warden", "-f", h.composeFile(), "up", "-d") != ups {
+			t.Errorf("%s: up ran with a config that doesn't load: %d", name, r.code)
+		}
+		r := h.run("down")
+		if r.code != ExitOK || !h.called("compose", "-p", "warden", "down") || !strings.Contains(r.stderr, note) {
+			t.Errorf("%s: down: %d\n%s%s", name, r.code, r.stdout, r.stderr)
+		}
+		if h.loadState().Controller.Running() {
+			t.Errorf("%s: state still records running containers after down", name)
+		}
+	}
+}

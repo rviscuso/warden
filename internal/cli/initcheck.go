@@ -55,6 +55,46 @@ func (e *env) checksEnv(mode checks.Mode, dirs paths.Dirs, home string) checks.E
 
 func baseDirs(d paths.Dirs) []string { return []string{d.Config, d.State, d.Share} }
 
+// interruptible returns a context that the first SIGINT or SIGTERM cancels,
+// and the function that ends the signal handling.
+func (e *env) interruptible() (context.Context, context.CancelFunc) {
+	if e.signals == nil {
+		return context.Background(), func() {}
+	}
+	ctx, stop := e.signals()
+	// Once the first signal has canceled ctx, signals go back to their default:
+	// a second Ctrl-C ends warden at once, cleanup or not.
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
+}
+
+// runChecks runs the checks under a context that SIGINT or SIGTERM cancels,
+// and reports whether that happened. The canary creates containers,
+// networks and a directory; killed by the signal, warden left them all
+// behind and every later run failed on the leftovers. Canceled instead, the
+// canary stops and its cleanup, which ignores the cancellation, removes
+// them.
+//
+// The handling lasts only as long as the checks. At a prompt Ctrl-C still
+// ends warden at once: nothing is half-made there, and a read from the
+// terminal can't be canceled.
+func (e *env) runChecks(mode checks.Mode, dirs paths.Dirs, home string) (rep *checks.Report, interrupted bool) {
+	ctx, stop := e.interruptible()
+	defer stop()
+	ce := e.checksEnv(mode, dirs, home)
+	ce.Ctx = ctx
+	rep = checks.Run(ce)
+	return rep, ctx.Err() != nil
+}
+
+// interruptedMsg says the run was interrupted. The report above it shows
+// which checks didn't finish and, in canary.cleanup, whether everything
+// the canary made was removed.
+func interruptedMsg(e *env, name string) int {
+	fmt.Fprintf(e.stderr, "warden %s: interrupted; the checks did not finish (canary.cleanup above says whether the canary was removed)\n", name)
+	return ExitFail
+}
+
 func runInit(e *env, jsonOut bool) int {
 	dirs, home, err := e.setup()
 	if err != nil {
@@ -82,11 +122,14 @@ func runInit(e *env, jsonOut bool) int {
 		return ExitFail
 	}
 
-	rep := checks.Run(e.checksEnv(checks.ModeInit, dirs, home))
+	rep, interrupted := e.runChecks(checks.ModeInit, dirs, home)
 	if summary {
 		printSummary(e.stdout, rep)
 	} else {
 		printReport(e.stdout, rep, jsonOut)
+	}
+	if interrupted {
+		return interruptedMsg(e, "init") // never pins, whatever the report says
 	}
 	if !rep.OK() {
 		return ExitFail
@@ -160,8 +203,11 @@ func runCheck(e *env, jsonOut bool) int {
 			return ExitFail
 		}
 	}
-	rep := checks.Run(e.checksEnv(checks.ModeCheck, dirs, home))
+	rep, interrupted := e.runChecks(checks.ModeCheck, dirs, home)
 	printReport(e.stdout, rep, jsonOut)
+	if interrupted {
+		return interruptedMsg(e, "check")
+	}
 	if !rep.OK() {
 		return ExitFail
 	}
